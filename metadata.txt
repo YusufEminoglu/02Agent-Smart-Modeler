@@ -1,0 +1,88 @@
+[general]
+name=02Agent Smart Modeler
+qgisMinimumVersion=3.44
+qgisMaximumVersion=4.99
+description=QGIS 3.44+ and QGIS 4 visual Processing studio with typed graphs, validated AI planning, smart proposals, and native model interchange.
+version=1.5.54
+author=Yusuf Eminoglu
+email=yusuf.eminoglu@deu.edu.tr
+
+about=02Agent Smart Modeler is a QGIS 3.44+ and QGIS 4 visual Processing studio with typed workflows, native .model3 interchange, validated AI planning, reviewed temporary-layer Processing runs, first-class QGIS expressions, and bounded OSM acquisition. Agent Workspace uses compact intent-routed prompts, read-only project tools, and a bounded Workspace (Developer) scope for source inspection, safe diagnostics, and exact reviewed patches; proposals remain inert until an explicit Apply or Run click. Optional Power Mode is off by default and adds full-source SQL, trusted-script, and generated PyQGIS approval cards. Database writes and live in-process Python require a second confirmation; isolated Python uses a cancellable timeout-bounded QGIS subprocess but is not a security sandbox. Connection URIs, credentials, source paths, feature values, and API secrets are not sent as tool metadata. Provider-reported last-request, chat, and cached input usage is visible, with a local preflight estimate and milestone-based large-request notices that never impose an absolute token stop. The 02Agent Urban Context preset can obtain roads, buildings, and trees in one reviewed run when installed; built-in geometry-specific OSM tools remain available. API keys use session memory or the optional encrypted QGIS vault. No pip dependencies are required. Online User Manual & Documentation: https://yusufeminoglu.github.io/02Agent-Smart-Modeler/ | If you find this plugin helpful, please consider starring the repository on GitHub (https://github.com/YusufEminoglu/02Agent-Smart-Modeler)!
+
+tracker=https://github.com/YusufEminoglu/02Agent-Smart-Modeler/issues
+repository=https://github.com/YusufEminoglu/02Agent-Smart-Modeler
+homepage=https://yusufeminoglu.github.io/02Agent-Smart-Modeler/
+
+category=Processing
+tags=zero2agent,qgis,qgis3,qgis4,modeler,processing,graphical-modeler,visual-programming,ai
+icon=icons/icon.png
+
+experimental=False
+deprecated=False
+hasProcessingProvider=yes
+license=GPL-3
+
+changelog=
+    1.5.54 - Rebrand as 02Agent Smart Modeler (formerly SmartModeler GIS); package renamed from planx_smartmodeler to zero2smartmodeler, moving the plugin from the PlanX family into the 02Agent family. No functional change.
+    1.5.17 - Recover bounded mechanical Agent proposal typos and ignore only confirmed graph output fields in Modeler responses.
+    1.5.16 - Add a single-command randomized DeepSeek matrix and hard-workflow test runner with bounded logs.
+    1.5.15 - Normalize safe generic typed aliases to the live Processing parameter kind before validation.
+    1.5.14 - Preserve required and extent bindings in bounded Processing resolve results and expose a resolver limit.
+    1.5.13 - Bootstrap the installed and enabled 02Agent OSM Downloader plugin state in the hard DeepSeek QGIS test.
+    1.5.12 - Keep the hard OSM workflow test extent below the sibling downloader's 100 km² safety limit.
+    1.5.11 - Fix the cached hard DeepSeek OSM workflow to seed the 02Agent OSM Downloader provider cache.
+    1.5.10 - Add a four-stage DeepSeek OSM-to-area-analysis workflow using the 02Agent OSM Downloader provider.
+    1.5.9 - Randomize equal-difficulty live DeepSeek task wording, operation order, layer names, filter fields, and buffer settings with reproducible seeds.
+    1.5.8 - Recover placeholder Agent context tokens through trusted inspection and normalize scalar/list Modeler enum labels and indices.
+    1.5.7 - Align live DeepSeek harness prompts with the GUI Agent contract and resolve semantic enum labels such as equals against live QGIS options.
+    1.5.6 - Recover additional DeepSeek proposal aliases, decorated legacy envelopes, concatenated terminal JSON, and human-readable Modeler enum labels.
+    1.5.5 - Add a ten-case opt-in DeepSeek acceptance matrix covering Modeler and Agent Workflow Processing runs.
+    1.5.4 - Recover DeepSeek's retired parameters/temporary_output Processing proposal shape into typed inputs without accepting destinations.
+    1.5.3 - Normalize DeepSeek's run proposal alias to the reviewed Processing proposal contract.
+    1.5.2 - Normalize DeepSeek final-labelled proposal envelopes before strict semantic rejection and recover processing/style kind aliases safely.
+    1.5.1 - Recover a valid DeepSeek proposal accidentally labelled as a final Agent turn without widening validation or approval authority.
+    1.5.0 - Add the bounded Workspace (Developer) Agent scope with source inspection, safe diagnostic commands, exact reviewed patches, and guarded undo.
+    1.4.2 - Add concrete DeepSeek agent envelopes, bounded provider-failure recovery, and a live harness that mirrors the shipped Agent Workflow retry boundary.
+    1.4.1 - Harden DeepSeek structured output with lowercase json instructions, disabled thinking, and one bounded empty-response retry for Modeler and Agent Workflow.
+    1.4.0 - Add a thirty-case offline acceptance matrix covering Graphical Modeler and Agent Workflow execution on QGIS 3.44 LTR and QGIS 4.2.
+    1.3.0 - Add the reviewed AI-facing reference-layer spatial extraction operation and preserve Processing capability on long follow-up messages.
+    1.2.1 - Declare verified QGIS 3.44 LTR compatibility alongside QGIS 4 and update support metadata.
+    1.2.0 - Add ten branching urban-planning showcase workflows, bounded Agent provider recovery for malformed/transient responses, and clearer Power Mode guidance.
+    1.1.0 - Add five showcase workflow graphs, a showcase-first example gallery, isolated headless scene acceptance, and corrected AI enum-list validation confirmed against DeepSeek.
+    1.0.0 - Production release: complete the supervised visual modeler, provider-neutral Agent Workspace, QGIS 4 clean-profile acceptance, QGIS 3.44 compatibility verification, and reproducible Hub packaging.
+    0.19.1 - Add provider-free numeric threshold filters and exact full-schema field lookup beyond truncated previews.
+    0.19.0 - Unify connected Workflow Studio AI with the multi-turn Agent Workspace and add staged strategy recovery.
+    0.18.9 - Support named-layer filters, long retries, and unique visible field-name correction without Power Mode.
+    0.18.8 - Recognize mixed-language attribute filters, explain Ask versus Act immediately, and stop repeated no-progress inspection loops.
+    0.18.7 - Make active-layer attribute filters deterministic, preserve retry capabilities, and normalize invalid provider call ids.
+    0.18.6 - Accept provider input arguments and recover mislabeled terminal proposals without executing attached tool calls.
+    0.18.5 - Raise the bounded Agent prompt budget to 30k characters and keep unrelated Power tool schemas out of normal Processing requests.
+    0.18.4 - Replace low token blocks with 300k/100k notices, reuse repeated inspections, harden provider proposal aliases, and keep Power Mode capabilities available.
+    0.18.3 - Preserve Processing tools across short follow-ups and accept bounded kind/processing provider aliases.
+    0.18.2 - Accept the provider-emitted parameters tool-call alias with strict conflict and argument validation.
+    0.18.1 - Accept safe provider tool-call aliases and route active-layer attribute filters to a reviewed temporary-layer run.
+    0.18.0 - Add compact capability-routed Agent prompts, token preflight budgets and cache telemetry, plus opt-in full-source SQL, trusted-script and cancellable isolated PyQGIS Power Mode.
+    0.17.0 - Add live QGIS expression help and parser-validated Field Calculator runs, including rand and geometry expressions, plus one-run roads/buildings/trees OSM routing.
+    0.16.2 - Make the Workflow Studio plugin icon background transparent while preserving its node-and-connection artwork.
+    0.16.1 - Harden the shared AI connection bridge, recover malformed provider profiles safely, and modernize bounded OSM output fields.
+    0.16.0 - Audit every live Processing algorithm through typed-node and JSON round-trip compatibility, preserve provider-native parameter defaults, and add a dedicated Agent Workspace icon.
+    0.15.3 - Add a secret-safe public AI Connections and Agent Workspace bridge for trusted companion plugins.
+    0.15.2 - Add optional reviewed integration with 02Agent OSM Downloader thematic presets and custom-tag Processing algorithms.
+    0.15.1 - Recover blank proposal display notes, expose the live active layer explicitly, and preserve the requested operation across short clarification replies.
+    0.15.0 - Add a built-in dependency-free OSM provider with reviewed current-extent point, line, and polygon downloads, pinned mirror fallback, strict request limits, cancellation, and temporary outputs.
+    0.14.0 - Show input and output tokens separately, resolve plugins by visible name or safe alias, add a general explicitly reviewed plugin-action approval contract, and integrate 02viz's offline smart chart suggestion for selected project layers.
+    0.13.0 - Generalize safe native QGIS and PlanX parameter binding, report exact execution blockers, run PlanX Space Syntax directly, and add an explicitly approved current-map QuickOSM building/data download adapter with pinned network and temporary-storage controls.
+    0.12.1 - Add compact exact provider token counters to Agent Workspace and Workflow Studio, clearly sequence multi-layer styling, and explain QuickOSM network/file capability boundaries without misreporting plugin availability.
+    0.12.0 - Recover missing proposal freshness receipts with a bounded read-only inspection, preserve explicit field clarifications, correct layer-style class counts locally, avoid repeated successful inspections, and materialize only requested primary Processing outputs.
+    0.10.1 - Separate Workflow Studio planning from the Agent run allowlist, expose PlanX and reviewed random extraction to AI graphs, include enum meanings/defaults in catalog signatures, and accept safe null-as-unconfigured provider parameters; verified with a live Konak 15-stop / 4-minute walking isochrone workflow.
+    0.10.0 - Add keyboard-complete graph authoring, an accessible workflow outline, screen-reader names and focus order, high-contrast focus states, fail-closed Run Setup, cancellable connection testing, in-app Help and Safety, standard Plugins menu placement, translation lifecycle fallback, and corrected privacy/support documentation.
+    0.9.0 - Add cancellable flag-aware QGIS task-manager execution, immutable run snapshots, one plugin-global run slot, structured terminal reports, main-thread atomic output commit, exact Agent result ownership, and verified rollback/late-cancel cleanup.
+    0.8.0 - Add ranked explainable auto-connect proposals, five versioned schema-driven micro-package workflows, and Model Properties controls for metadata and explicit zero/subset/intermediate Processing layer outputs with mandatory-result enforcement.
+    0.7.1 - Rebuild configuration-dependent Processing nodes from their configured live signatures across native import, JSON reload, export, and Studio execution.
+    0.7.0 - Add bounded V3 SmartModeler JSON with validated V2 migration and live-registry port reconstruction; preserve typed parameters, ordered sources, inactive/configured children, edited defaults, conditional execution, and declared output behavior across Studio and .model3.
+    0.6.0 - Remove attribute-value inspection and redact all existing workflow parameters from provider context; restrict AI workflow algorithms to the reviewed deny-by-default policy; harden live signatures and edit-aware Undo; add general document Undo/Redo, guarded lifecycle, atomic save, and crash recovery.
+    0.4.0 - New Agent Workspace dock: bounded read-only project, layer, Processing, model and plugin inspections, a provider-neutral Agent Chat over twelve read-only tools, and four kinds of validated proposal. Explicit approval is required for every action; an approved run is limited to twelve reviewed native algorithms or your current workflow, always writes to temporary layers, and can be cancelled and undone.
+    0.3.1 - Clean node palette and focus strictly on GIS graphical modeler workflows.
+    0.3.0 - Add the first AI settings dialog and experimental visual nodes.
+    0.2.0 - Add the initial AI prompt engine, auto-layout, and prompt bar prototypes.
+    0.1.0 - Initial release.

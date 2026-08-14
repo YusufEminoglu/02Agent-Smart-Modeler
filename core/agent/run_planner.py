@@ -1,0 +1,821 @@
+"""Pure, QGIS-free planner that turns one parsed run proposal into a resolved,
+policy-checked execution plan.
+
+Every *security* decision for an execution lives here, not in the QGIS adapter:
+which parameters a proposal may bind at all, whether a tagged binding may
+satisfy the live parameter's kind, whether a referenced layer/field/enum option
+actually exists, whether a number is inside the live bounds, and which
+destinations exist (always forced to a temporary output by the caller). The
+trusted runtime boundary (`runtime_proposals.py`) only *adapts* live QGIS
+objects into the small immutable views below and then materializes the plan.
+
+Keeping the decisions here means they are unit-testable without a Processing
+registry, and that a mistake in the QGIS adapter cannot silently widen the
+policy: the adapter can only narrow what the plan already permits.
+
+Nothing here resolves a path, opens a file, touches a QgsProject, or executes
+anything. A plan is inert data.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
+
+from .proposals import (
+    MAX_RUN_STRING_CHARS,
+    MAX_WARNINGS,
+    ProposalError,
+    ProposalReason,
+    _looks_like_path_or_uri,
+)
+from .safe_algorithm_policy import (
+    BOOL,
+    CRS,
+    DISTANCE,
+    ENUM,
+    EXPRESSION,
+    FIELD,
+    MULTI_RASTER,
+    MULTI_VECTOR,
+    MAP_EXTENT,
+    NUMBER,
+    OSM_TAG,
+    ParamSpec,
+    RASTER_LAYER,
+    STRING_LABEL,
+    STRING_TEXT,
+    SafeAlgorithmPolicy,
+    VECTOR_LAYER,
+    kind_matches,
+)
+
+# Layer kinds a :class:`LayerView` may report.
+VECTOR = "vector"
+RASTER = "raster"
+
+# A label-safe string binding (an output column name) is far shorter than the
+# generic proposal string bound; anything longer is not a label.
+MAX_LABEL_STRING_CHARS = 128
+# Bounds on what a single plan may touch, mirroring the proposal-level bounds.
+MAX_PLAN_INPUT_LAYERS = 25
+MAX_PREVIEW_LINES = 40
+MAX_PREVIEW_VALUE_CHARS = 120
+# Ceiling on the graph a model_run may execute, mirroring the model_patch
+# candidate ceiling so a run can never exceed what a patch could build.
+MAX_RUN_NODES = 80
+
+# The only non-Processing node kinds a model_run may contain. They are
+# application-owned 02Agent Smart Modeler inputs with no side effect of their own.
+ALLOWED_SMART_NODES = frozenset(
+    {
+        "smart:input_layer",
+        "smart:raster_layer",
+        "smart:number",
+        "smart:slider",
+        "smart:boolean",
+        "smart:string",
+        "smart:field",
+        "smart:crs",
+        "smart:extent",
+        "smart:enum",
+        "smart:map_layer",
+        "smart:multiple_vector",
+        "smart:multiple_raster",
+    }
+)
+
+# Which logical parameter kinds each tagged binding form may satisfy. A tag can
+# never reach a kind outside this table, so a string can never land on a layer
+# parameter and a number can never land on a field.
+_TAG_KINDS: Mapping[str, FrozenSet[str]] = {
+    "layer": frozenset({VECTOR_LAYER, RASTER_LAYER}),
+    "layers": frozenset({MULTI_RASTER, MULTI_VECTOR}),
+    "field": frozenset({FIELD}),
+    "number": frozenset({NUMBER}),
+    "distance": frozenset({DISTANCE}),
+    "bool": frozenset({BOOL}),
+    "enum": frozenset({ENUM}),
+    "enum_string": frozenset({ENUM}),
+    "string": frozenset({STRING_LABEL}),
+    "text": frozenset({STRING_TEXT}),
+    "crs": frozenset({CRS}),
+    "map_extent": frozenset({MAP_EXTENT}),
+    "layer_extent": frozenset({MAP_EXTENT}),
+    "osm_tag": frozenset({OSM_TAG}),
+    "expression": frozenset({EXPRESSION}),
+}
+
+# Which layer kind each layer-ish parameter kind demands.
+_KIND_LAYER_TYPE = {
+    VECTOR_LAYER: VECTOR,
+    RASTER_LAYER: RASTER,
+    MULTI_RASTER: RASTER,
+    MULTI_VECTOR: VECTOR,
+}
+
+
+@dataclass(frozen=True)
+class LayerView:
+    """A QGIS-free view of one live project layer, resolved by id."""
+
+    layer_id: str
+    name: str
+    kind: str
+    field_names: FrozenSet[str] = frozenset()
+    # Field name -> QGIS type name ("Integer", "String", "Real", ...), lowered.
+    # A binding validator that knows only *whether* a field exists cannot see
+    # that "<" on a String field is a lexicographic comparison.
+    field_types: Mapping[str, str] = field(default_factory=dict)
+    # False for a geographic or Mercator CRS, where $area/$length is distorted.
+    area_safe_crs: bool = True
+
+
+@dataclass(frozen=True)
+class ResolvedBinding:
+    """One proposal binding, resolved against the live parameter and project."""
+
+    param: str
+    kind: str
+    tag: str
+    layer_ids: Tuple[str, ...] = ()
+    value: Any = None
+
+
+@dataclass(frozen=True)
+class RunPlan:
+    """An inert, fully resolved plan for one reviewed algorithm run."""
+
+    algorithm_id: str
+    bindings: Tuple[ResolvedBinding, ...] = ()
+    destinations: Tuple[str, ...] = ()
+    parameter_destinations: Tuple[str, ...] = ()
+    internal_destinations: Tuple[str, ...] = ()
+    fixed_values: Tuple[Tuple[str, Any], ...] = ()
+    network_access: bool = False
+    temporary_file: bool = False
+    input_layer_ids: Tuple[str, ...] = ()
+    preview_lines: Tuple[str, ...] = ()
+
+    def binding_for(self, param: str) -> Optional[ResolvedBinding]:
+        for binding in self.bindings:
+            if binding.param == param:
+                return binding
+        return None
+
+
+@dataclass(frozen=True)
+class ModelRunPlan:
+    """An inert, fully checked plan for running the current graph."""
+
+    node_count: int = 0
+    algorithm_ids: Tuple[str, ...] = ()
+    terminal_outputs: Tuple[str, ...] = ()
+    preview_lines: Tuple[str, ...] = ()
+
+
+LayerLookup = Callable[[str], Optional[LayerView]]
+# Returns the live parameter set of one algorithm id, or ``None`` when the
+# algorithm is not present in the live registry.
+ParamsLookup = Callable[[str], Optional[Sequence[ParamSpec]]]
+
+
+def _reject(message: str, reason: str) -> None:
+    raise ProposalError(message, reason)
+
+
+def _preview_value(value: Any) -> str:
+    text = value if isinstance(value, str) else repr(value)
+    return text[:MAX_PREVIEW_VALUE_CHARS]
+
+
+def _resolve_layer(layer_id: str, layer_lookup: LayerLookup, expected_kind: str) -> LayerView:
+    view = layer_lookup(layer_id)
+    if view is None:
+        _reject("An input layer is not in the project.", ProposalReason.TARGET_MISSING)
+    wanted = _KIND_LAYER_TYPE.get(expected_kind)
+    if wanted is not None and view.kind != wanted:
+        _reject(
+            "An input layer is not of the type this parameter needs.",
+            ProposalReason.VALIDATION_FAILED,
+        )
+    return view
+
+
+def _canonical_tag(kind: str, tag: str) -> str:
+    """Accept only safe semantic aliases for a live parameter kind.
+
+    Providers sometimes use the generic ``string``/``text`` or ``number``
+    labels even when the live Agent contract advertises a narrower typed form.
+    The conversion does not widen authority: the same live kind, bounds, and
+    policy check still apply before materialization.
+    """
+    aliases = {
+        OSM_TAG: {"string": "osm_tag", "text": "osm_tag"},
+        STRING_LABEL: {"text": "string"},
+        STRING_TEXT: {"string": "text"},
+        DISTANCE: {"number": "distance"},
+        NUMBER: {"distance": "number"},
+        ENUM: {"string": "enum_string", "text": "enum_string"},
+    }
+    return aliases.get(kind, {}).get(tag, tag)
+
+
+def _check_common(
+    param: str,
+    tag: str,
+    policy: SafeAlgorithmPolicy,
+    record,
+    params_by_name: Mapping[str, ParamSpec],
+) -> Tuple[str, ParamSpec, str]:
+    """Return the (kind, live spec) a binding must satisfy, or fail closed."""
+    # The policy -- not this planner and not the proposal -- decides whether a
+    # parameter is bindable at all, and to what kind.
+    kind = policy.expected_kind(record, param)
+    if kind is None:
+        # Not bindable at all: an unknown parameter, or a destination, or a
+        # reviewed-but-unbindable parameter such as a raster creation option.
+        _reject(
+            f"Parameter {param} cannot be set by a proposal.",
+            ProposalReason.UNSAFE_PARAMETER,
+        )
+    spec = params_by_name.get(param)
+    if spec is None:
+        _reject("This parameter is not part of the algorithm.", ProposalReason.SIGNATURE_MISMATCH)
+    if spec.is_destination:
+        # Belt and braces: the allowlist never lists a destination as bindable.
+        _reject("An output destination cannot be supplied.", ProposalReason.UNSAFE_PARAMETER)
+    if not kind_matches(kind, spec):
+        _reject("A parameter changed type since review.", ProposalReason.SIGNATURE_MISMATCH)
+    canonical_tag = _canonical_tag(kind, tag)
+    if kind not in _TAG_KINDS.get(canonical_tag, frozenset()):
+        _reject(
+            "This value form is not valid for this parameter.",
+            ProposalReason.UNSAFE_PARAMETER,
+        )
+    return kind, spec, canonical_tag
+
+
+def _plan_number(spec: ParamSpec, value: Any) -> Any:
+    number = float(value)
+    if spec.minimum is not None and number < float(spec.minimum):
+        _reject("A numeric parameter is below its allowed minimum.", ProposalReason.VALIDATION_FAILED)
+    if spec.maximum is not None and number > float(spec.maximum):
+        _reject("A numeric parameter is above its allowed maximum.", ProposalReason.VALIDATION_FAILED)
+    return value
+
+
+def _plan_enum(spec: ParamSpec, tag: str, value: Any) -> int:
+    options = tuple(spec.options or ())
+    if not options:
+        _reject("This choice parameter has no live options.", ProposalReason.VALIDATION_FAILED)
+    if tag == "enum":
+        index = int(value)
+        if index < 0 or index >= len(options):
+            _reject("A choice index is outside the live options.", ProposalReason.VALIDATION_FAILED)
+        return index
+    wanted = str(value).strip().casefold()
+    wanted = {
+        "equals": "=",
+        "equal": "=",
+        "equal to": "=",
+        "not equals": "≠",
+        "not equal": "≠",
+        "!=": "≠",
+        "<>": "≠",
+        "does not equal": "≠",
+        "≤": "<=",
+        "≥": ">=",
+        "less than": "<",
+        "greater than": ">",
+    }.get(wanted, wanted)
+    labels = [str(option).strip() for option in options]
+
+    # Exact first. A label binding exists precisely so a *wrong* choice fails
+    # loudly instead of silently selecting a different option, so every step
+    # below stays unambiguous: a candidate is used only when exactly one live
+    # option matches it.
+    for index, label in enumerate(labels):
+        if label.casefold() == wanted:
+            return index
+
+    def _unique(predicate) -> Optional[int]:
+        hits = [index for index, label in enumerate(labels) if predicate(label)]
+        return hits[0] if len(hits) == 1 else None
+
+    # QGIS labels carry qualifiers the model rarely reproduces verbatim:
+    # "Decimal (double)", "Quantile (Equal Count)", "Number of features".
+    # Comparing on the label's leading words, and on a punctuation-free form,
+    # matches those without ever accepting an ambiguous abbreviation.
+    def _simplify(text: str) -> str:
+        return "".join(
+            character
+            for character in text.casefold()
+            if character.isalnum()
+        )
+
+    simplified = _simplify(wanted)
+    if simplified:
+        index = _unique(lambda label: _simplify(label) == simplified)
+        if index is not None:
+            return index
+        index = _unique(lambda label: _simplify(label).startswith(simplified))
+        if index is not None:
+            return index
+        index = _unique(lambda label: simplified in _simplify(label))
+        if index is not None:
+            return index
+
+    _reject(
+        "A choice label does not match any live option. Live options: "
+        + ", ".join(_preview_value(label) for label in labels[:12])
+        + ".",
+        ProposalReason.VALIDATION_FAILED,
+    )
+    return 0  # pragma: no cover - _reject always raises
+
+
+def _plan_field(
+    binding, layers_by_param: Mapping[str, Tuple[LayerView, ...]]
+) -> str:
+    views = layers_by_param.get(binding.layer_param)
+    if not views:
+        _reject(
+            "A field was bound to a parameter that is not a bound input layer.",
+            ProposalReason.VALIDATION_FAILED,
+        )
+    if len(views) != 1 or views[0].kind != VECTOR:
+        _reject(
+            "A field can only be bound to a single vector input layer.",
+            ProposalReason.VALIDATION_FAILED,
+        )
+    if binding.value not in views[0].field_names:
+        _reject(
+            "A field does not exist on the bound input layer.",
+            ProposalReason.VALIDATION_FAILED,
+        )
+    return binding.value
+
+
+_ATTRIBUTE_FILTER_ID = "native:extractbyattribute"
+_FIELD_CALCULATOR_ID = "native:fieldcalculator"
+
+# Live QGIS option labels for an *ordering* comparison. On a text field QGIS
+# compares these lexicographically without warning, so "1097" < "400" is true
+# and "568" < "400" is false: the run succeeds and the answer is nonsense.
+_ORDERING_OPERATORS = frozenset({"<", "<=", ">", ">=", "≤", "≥"})
+
+# Geometry measures whose value depends entirely on the layer's CRS.
+_MEASURE_TOKENS = (
+    "$area",
+    "$length",
+    "$perimeter",
+    "area(",
+    "length(",
+    "perimeter(",
+)
+
+def _type_family(type_name: str) -> str:
+    """Collapse a QGIS type name onto the family a value comparison cares about."""
+    text = str(type_name or "").casefold()
+    if any(token in text for token in ("string", "text", "varchar", "char")):
+        return "text"
+    if "bool" in text:
+        return "boolean"
+    if "datetime" in text or "date & time" in text:
+        return "datetime"
+    if "date" in text:
+        return "date"
+    if "time" in text:
+        return "time"
+    if any(token in text for token in ("int", "integer")):
+        return "integer"
+    if any(
+        token in text for token in ("real", "double", "float", "decimal", "numeric")
+    ):
+        return "real"
+    return text
+
+
+def _looks_numeric(value: Any) -> bool:
+    try:
+        float(str(value).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _bound_vector_views(
+    layers_by_param: Mapping[str, Tuple[LayerView, ...]]
+) -> Tuple[LayerView, ...]:
+    return tuple(
+        view
+        for views in layers_by_param.values()
+        for view in views
+        if view.kind == VECTOR
+    )
+
+
+def _check_semantic_traps(
+    algorithm_id: str,
+    resolved: Sequence[ResolvedBinding],
+    params_by_name: Mapping[str, ParamSpec],
+    layers_by_param: Mapping[str, Tuple[LayerView, ...]],
+) -> None:
+    """Refuse the runs QGIS executes happily and answers wrongly.
+
+    Everything above this point checks that a binding is *well formed*: the
+    parameter exists, the field exists, the enum index is in range. All three
+    traps below pass every one of those checks and still produce a confidently
+    wrong layer, which is worse than an error -- an owner session spent six
+    turns concluding "no building is under 400 m^2" when a third of them were.
+    """
+    values = {binding.param: binding.value for binding in resolved}
+
+    # Trap 1 -- an ordering comparison against a text field.
+    if algorithm_id == _ATTRIBUTE_FILTER_ID:
+        field_name = values.get("FIELD")
+        operator_spec = params_by_name.get("OPERATOR")
+        operator_index = values.get("OPERATOR")
+        options = tuple(getattr(operator_spec, "options", ()) or ())
+        label = ""
+        if isinstance(operator_index, int) and 0 <= operator_index < len(options):
+            label = str(options[operator_index]).strip()
+        views = layers_by_param.get("INPUT", ())
+        field_type = ""
+        if views and isinstance(field_name, str):
+            field_type = views[0].field_types.get(field_name, "")
+        if (
+            label in _ORDERING_OPERATORS
+            and _type_family(field_type) == "text"
+            and _looks_numeric(values.get("VALUE"))
+        ):
+            _reject(
+                f"Field {field_name!r} is text, so QGIS would compare it to "
+                f"{values.get('VALUE')!r} letter by letter, not as a number: "
+                f"'1097' would count as smaller than '400'. Calculate the "
+                f"value into a NEW numeric field first, then filter on that.",
+                ProposalReason.VALIDATION_FAILED,
+            )
+
+    # Trap 2 -- retyping a field by recalculating it under the same name.
+    if algorithm_id == _FIELD_CALCULATOR_ID:
+        new_name = values.get("FIELD_NAME")
+        type_spec = params_by_name.get("FIELD_TYPE")
+        type_index = values.get("FIELD_TYPE")
+        options = tuple(getattr(type_spec, "options", ()) or ())
+        views = layers_by_param.get("INPUT", ())
+        existing = ""
+        if views and isinstance(new_name, str):
+            existing = views[0].field_types.get(new_name, "")
+        if (
+            existing
+            and isinstance(type_index, int)
+            and 0 <= type_index < len(options)
+        ):
+            wanted = _type_family(str(options[type_index]))
+            if wanted != _type_family(existing):
+                _reject(
+                    f"Field {new_name!r} already exists as {existing!r} and "
+                    f"QGIS keeps that type when it recalculates a field: the "
+                    f"run would report success and change nothing. Write the "
+                    f"result to a NEW field name instead.",
+                    ProposalReason.VALIDATION_FAILED,
+                )
+
+    # Trap 3 -- a geometry measure on a CRS that does not measure in true metres.
+    measures = [
+        binding
+        for binding in resolved
+        if binding.tag == "expression"
+        and any(token in str(binding.value).casefold() for token in _MEASURE_TOKENS)
+    ]
+    if measures:
+        distorted = [
+            view for view in _bound_vector_views(layers_by_param) if not view.area_safe_crs
+        ]
+        if distorted:
+            names = ", ".join(_preview_value(view.name) for view in distorted[:3])
+            _reject(
+                f"A geometry measure ($area/$length) was requested on {names}, "
+                f"whose CRS does not measure in true metres -- a geographic CRS "
+                f"measures degrees, and Web Mercator (EPSG:3857, what every OSM "
+                f"download returns) inflates area by 1/cos^2(latitude): 1.76x at "
+                f"41 degrees north, so a real 324 m^2 building measures 569 m^2. "
+                f"Reproject the layer to a local metric CRS with "
+                f"native:reprojectlayer first, then measure on the result.",
+                ProposalReason.VALIDATION_FAILED,
+            )
+
+
+def plan_processing_run(
+    proposal: Any,
+    policy: SafeAlgorithmPolicy,
+    record: Any,
+    params: Sequence[ParamSpec],
+    layer_lookup: LayerLookup,
+    *,
+    active_layer_id: Optional[str] = None,
+    require_active_layer: bool = False,
+) -> RunPlan:
+    """Resolve one ``processing_run`` proposal into an inert :class:`RunPlan`.
+
+    ``record`` is the reviewed allowlist entry (its signature was already
+    confirmed against ``params`` by :class:`SafeAlgorithmPolicy`). Raises
+    :class:`ProposalError` with a stable reason code for any violation; on
+    success every binding is known to reference live, correctly typed state.
+    """
+    params_by_name: Dict[str, ParamSpec] = {spec.name: spec for spec in params}
+    layers_by_param: Dict[str, Tuple[LayerView, ...]] = {}
+    resolved: List[ResolvedBinding] = []
+    input_layer_ids: List[str] = []
+    preview: List[str] = []
+    active_primary_param = (
+        record.required_layer_params[0]
+        if require_active_layer and record.required_layer_params
+        else ""
+    )
+
+    # Pass 1 -- layer bindings only, so a later field binding can be checked
+    # against the layer it names without depending on dict ordering.
+    for param, binding in proposal.inputs:
+        if binding.tag not in ("layer", "layers", "layer_extent"):
+            continue
+        kind, _spec, tag = _check_common(
+            param, binding.tag, policy, record, params_by_name
+        )
+        ids = (
+            (binding.value,)
+            if tag in ("layer", "layer_extent")
+            else tuple(binding.value)
+        )
+        # ACTIVE_LAYER is an application-owned scope, not a suggestion to the
+        # provider.  Keep the first required layer input attached to the live
+        # active layer even when a provider echoes a stale id from an earlier
+        # stage.  Secondary inputs remain provider-selected and are still
+        # resolved strictly by exact project id.
+        # A *multi* primary input is the exception: rewriting it to the single
+        # active layer turns "merge these two layers" into a one-layer merge
+        # that still reports success. Keep every layer the proposal named and
+        # enforce the scope as membership instead, checked below.
+        if active_layer_id and tag != "layers" and (
+            param == active_primary_param
+            or (not active_primary_param and tag == "layer_extent")
+        ):
+            ids = (active_layer_id,)
+        if len(ids) > MAX_PLAN_INPUT_LAYERS:
+            _reject("Too many input layers were bound.", ProposalReason.LIMIT_EXCEEDED)
+        views = tuple(_resolve_layer(layer_id, layer_lookup, kind) for layer_id in ids)
+        layers_by_param[param] = views
+        resolved.append(
+            ResolvedBinding(
+                param=param,
+                kind=kind,
+                tag=tag,
+                layer_ids=tuple(view.layer_id for view in views),
+            )
+        )
+        input_layer_ids.extend(view.layer_id for view in views)
+        names = ", ".join(_preview_value(view.name) for view in views)
+        label = "layer extent" if tag == "layer_extent" else "layer"
+        preview.append(f"{param}: {label} {names}")
+
+    # Pass 2 -- every other tagged binding.
+    for param, binding in proposal.inputs:
+        if binding.tag in ("layer", "layers", "layer_extent"):
+            continue
+        kind, spec, tag = _check_common(
+            param, binding.tag, policy, record, params_by_name
+        )
+        if tag == "field":
+            value: Any = _plan_field(binding, layers_by_param)
+        elif tag in ("number", "distance"):
+            value = _plan_number(spec, binding.value)
+        elif tag == "bool":
+            value = bool(binding.value)
+        elif tag in ("enum", "enum_string"):
+            value = _plan_enum(spec, tag, binding.value)
+        elif tag in ("string", "text", "osm_tag", "expression"):
+            maximum = (
+                MAX_LABEL_STRING_CHARS
+                if kind == STRING_LABEL
+                else MAX_RUN_STRING_CHARS
+            )
+            if len(str(binding.value)) > maximum:
+                _reject("A text value is too long.", ProposalReason.LIMIT_EXCEEDED)
+            value = str(binding.value)
+            # A parameter that names a new field is normalized: QGIS would
+            # otherwise create "area_m2 " verbatim, the run would report
+            # success, and the requested "area_m2" would not exist on the
+            # result. Surrounding whitespace is never part of an intended
+            # field name, so strip it rather than fail an otherwise good run.
+            if param in record.new_field_params:
+                value = value.strip()
+                if not value:
+                    _reject(
+                        "A new field name cannot be blank.",
+                        ProposalReason.VALIDATION_FAILED,
+                    )
+        elif tag == "map_extent":
+            value = True
+        else:  # crs -- the authid's validity is confirmed by the QGIS adapter
+            value = str(binding.value)
+        resolved.append(ResolvedBinding(param=param, kind=kind, tag=tag, value=value))
+        preview.append(f"{param}: {_preview_value(value)}")
+
+    _check_semantic_traps(
+        proposal.algorithm_id, resolved, params_by_name, layers_by_param
+    )
+
+    # Every reviewed required input must actually be bound.
+    bound_names = {binding.param for binding in resolved}
+    for required in tuple(record.required_layer_params) + tuple(record.required_params):
+        if required not in bound_names:
+            _reject("A required input was not provided.", ProposalReason.VALIDATION_FAILED)
+
+    # In active-layer scope the reviewed primary input must be the active layer.
+    if require_active_layer:
+        primary = record.required_layer_params[0] if record.required_layer_params else ""
+        views = layers_by_param.get(primary, ())
+        if not primary:
+            views = tuple(
+                view
+                for param, binding in proposal.inputs
+                if binding.tag == "layer_extent"
+                for view in layers_by_param.get(param, ())
+            )
+        # Membership, not position: a single-layer primary was pinned to the
+        # active layer above, so this is unchanged for it, while a multi-layer
+        # primary may legitimately list the active layer second.
+        if not active_layer_id or not views or all(
+            view.layer_id != active_layer_id for view in views
+        ):
+            _reject(
+                "The run's primary input is not the current active layer.",
+                ProposalReason.TARGET_MISSING,
+            )
+
+    for warning in tuple(proposal.warnings)[:MAX_WARNINGS]:
+        preview.append(f"warning: {_preview_value(warning)}")
+
+    return RunPlan(
+        algorithm_id=proposal.algorithm_id,
+        bindings=tuple(resolved),
+        destinations=tuple(record.result_outputs or record.destinations),
+        parameter_destinations=tuple(record.destinations),
+        internal_destinations=tuple(record.internal_destinations),
+        fixed_values=tuple((record.fixed_values or {}).items()),
+        network_access=bool(record.network_access),
+        temporary_file=bool(record.internal_destinations),
+        input_layer_ids=tuple(dict.fromkeys(input_layer_ids)),
+        preview_lines=tuple(preview[:MAX_PREVIEW_LINES]),
+    )
+
+
+def _node_destination_is_safe(value: Any) -> bool:
+    """Whether a graph node's configured destination value is safe to run.
+
+    Only an unset value (the engine then forces a temporary output) or the
+    literal temporary-output sentinel is acceptable; a configured file, folder,
+    database, or network destination is not.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        text = value.strip()
+        return not text or text == "TEMPORARY_OUTPUT"
+    return False
+
+
+def plan_model_run(
+    graph: Any,
+    policy: SafeAlgorithmPolicy,
+    params_lookup: ParamsLookup,
+) -> ModelRunPlan:
+    """Check the live current graph node by node and return an inert plan.
+
+    Every Processing node must pass the same deny-by-default policy a single
+    ``processing_run`` passes; only application-owned ``smart:*`` input nodes are
+    exempt. Any configured file/folder/database/network destination on a node is
+    rejected outright rather than silently rewritten.
+    """
+    if graph is None or not getattr(graph, "nodes", None):
+        _reject("There is no current workflow to run.", ProposalReason.VALIDATION_FAILED)
+    nodes = list(graph.nodes.values())
+    if len(nodes) > MAX_RUN_NODES:
+        _reject("The current workflow is too large to run.", ProposalReason.LIMIT_EXCEEDED)
+    issues = [issue for issue in graph.validate() if getattr(issue, "level", "") == "error"]
+    if issues:
+        _reject(
+            "The current workflow has validation errors; fix them before running.",
+            ProposalReason.VALIDATION_FAILED,
+        )
+
+    algorithm_ids: List[str] = []
+    for node in nodes:
+        algorithm_id = str(getattr(node, "algorithm_id", ""))
+        parameters = dict(getattr(node, "parameters", {}) or {})
+        if algorithm_id in ALLOWED_SMART_NODES:
+            _check_smart_node_values(parameters)
+            continue
+        specs = params_lookup(algorithm_id)
+        if specs is None:
+            _reject(
+                "The workflow uses an algorithm that is not available.",
+                ProposalReason.ALGORITHM_NOT_ALLOWED,
+            )
+        decision = policy.is_runnable(algorithm_id, specs)
+        if not decision.allowed:
+            _reject(
+                "The workflow uses an algorithm that is not approved for agent runs.",
+                decision.reason_code,
+            )
+        _check_processing_node_values(parameters, specs)
+        algorithm_ids.append(algorithm_id)
+
+    terminal_outputs = _terminal_output_names(graph)
+    preview = [f"Nodes: {len(nodes)}", f"Processing steps: {len(algorithm_ids)}"]
+    if terminal_outputs:
+        preview.append("Terminal outputs: " + ", ".join(terminal_outputs[:10]))
+    return ModelRunPlan(
+        node_count=len(nodes),
+        algorithm_ids=tuple(algorithm_ids),
+        terminal_outputs=tuple(terminal_outputs),
+        preview_lines=tuple(preview[:MAX_PREVIEW_LINES]),
+    )
+
+
+def _check_smart_node_values(parameters: Mapping[str, Any]) -> None:
+    """A smart input node may reference a project layer id/name or a number --
+    never a path, URI, or connection string."""
+    for value in parameters.values():
+        if isinstance(value, str) and _looks_like_path_or_uri(value):
+            _reject(
+                "A workflow input refers to a file or connection rather than a project layer.",
+                ProposalReason.UNSAFE_PARAMETER,
+            )
+
+
+def _check_processing_node_values(
+    parameters: Mapping[str, Any], specs: Sequence[ParamSpec]
+) -> None:
+    by_name = {spec.name: spec for spec in specs}
+    for name, value in parameters.items():
+        spec = by_name.get(name)
+        if spec is not None and spec.is_destination:
+            if not _node_destination_is_safe(value):
+                _reject(
+                    "A workflow step writes to a file, database, or network destination.",
+                    ProposalReason.UNSAFE_PARAMETER,
+                )
+            continue
+        if isinstance(value, str) and _looks_like_path_or_uri(value):
+            _reject(
+                "A workflow step parameter refers to a file or connection.",
+                ProposalReason.UNSAFE_PARAMETER,
+            )
+
+
+def _terminal_output_names(graph: Any) -> List[str]:
+    names: List[str] = []
+    for node_id, node in graph.nodes.items():
+        if any(True for _edge in graph.outgoing_edges(node_id)):
+            continue
+        for output_id in getattr(node, "outputs", {}) or {}:
+            names.append(str(output_id))
+    return names
+
+
+@dataclass(frozen=True)
+class RunResultSummary:
+    """The bounded, detached description of a finished run.
+
+    ``to_dict`` travels from the coordinator to the trusted dock only. It holds
+    layer names and ids -- the same identifiers the read-only ``layer.list``
+    inspection already exposes -- so the dock can render the result and record
+    exactly which layers a later Undo may remove. It carries no source path, no
+    parameter value, and no feature value, and it is never sent to the provider.
+    """
+
+    kind: str
+    title: str
+    target: str
+    layer_names: Tuple[str, ...] = field(default_factory=tuple)
+    layer_ids: Tuple[str, ...] = field(default_factory=tuple)
+    lines: Tuple[str, ...] = field(default_factory=tuple)
+    # Names of result layers that came back holding nothing. A record count is
+    # an aggregate, not a feature value, and "it produced a layer" read as
+    # success for an empty one long enough for the agent to narrate a filter
+    # that had matched nothing as if it had worked.
+    empty_layer_names: Tuple[str, ...] = field(default_factory=tuple)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "title": self.title,
+            "target": self.target,
+            "layer_names": list(self.layer_names),
+            "layer_ids": list(self.layer_ids),
+            "layer_count": len(self.layer_ids),
+            "empty_layer_names": list(self.empty_layer_names),
+            "lines": list(self.lines),
+        }

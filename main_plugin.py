@@ -1,0 +1,299 @@
+"""QGIS plugin lifecycle for 02Agent Smart Modeler."""
+from __future__ import annotations
+
+import contextlib
+import os
+
+from qgis.PyQt.QtCore import QTimer, Qt
+from qgis.PyQt.QtGui import QAction, QIcon
+from qgis.core import QgsApplication
+
+from .core.agent.contracts import AgentMode, AgentScope
+from .core.translation import TranslationManager
+from .gui.agent_dock import AgentWorkspaceDock
+from .gui.help_dialog import HelpDialog
+from .gui.modeler_window import SmartModelerWindow
+from .processing.provider import SmartModelerProcessingProvider
+
+
+class _ModelWindowApplyAdapter:
+    """The one trusted seam through which an approved model-patch action reaches
+    the live Workflow Studio graph. It exposes only reading the current graph and
+    installing a replacement graph through the window's trusted refresh path; it
+    grants no other window control. A model apply with no open studio fails
+    closed (``current_graph`` returns ``None``)."""
+
+    def __init__(self, plugin: "SmartModelerPlugin") -> None:
+        self._plugin = plugin
+
+    def current_graph(self):
+        return self._plugin._current_graph()
+
+    def install_graph(self, graph) -> None:
+        window = self._plugin.window
+        if window is None or not window.isVisible():
+            raise RuntimeError("No open Workflow Studio model to apply to.")
+        window.apply_agent_graph(graph)
+
+
+class SmartModelerPlugin:
+    """Registers the QGIS 4 workflow studio action and the Agent Workspace dock."""
+
+    def __init__(self, iface) -> None:
+        self.iface = iface
+        self.plugin_dir = os.path.dirname(__file__)
+        self.translation = TranslationManager(self.plugin_dir)
+        self.translation.install()
+        self.action: QAction | None = None
+        self.window: SmartModelerWindow | None = None
+        self.agent_action: QAction | None = None
+        self.agent_dock: AgentWorkspaceDock | None = None
+        self.help_action: QAction | None = None
+        self.help_dialog: HelpDialog | None = None
+        self.processing_provider: SmartModelerProcessingProvider | None = None
+
+    def initProcessing(self) -> None:
+        """Register the provider in desktop QGIS and headless qgis_process."""
+        if self.processing_provider is not None:
+            return
+        registry = QgsApplication.processingRegistry()
+        if registry.providerById(SmartModelerProcessingProvider.PROVIDER_ID) is None:
+            provider = SmartModelerProcessingProvider()
+            if registry.addProvider(provider):
+                self.processing_provider = provider
+
+    def initGui(self) -> None:
+        self.initProcessing()
+        if self.iface is None:
+            return
+
+        icon_path = os.path.join(self.plugin_dir, "icons", "icon.png")
+        icon = (
+            QIcon(icon_path)
+            if os.path.exists(icon_path)
+            else QgsApplication.getThemeIcon("/processingModel.svg")
+        )
+        self.action = QAction(
+            icon,
+            "02Agent Smart Modeler - Workflow Studio",
+            self.iface.mainWindow(),
+        )
+        self.action.setObjectName("SmartModelerAction")
+        self.action.setStatusTip("Design and run QGIS 4 Processing workflows")
+        self.action.triggered.connect(self.run)
+        self.iface.addPluginToMenu("02Agent Smart Modeler", self.action)
+        # The Plugins toolbar, like every other plugin here and the shared
+        # template. The Vector toolbar was used instead, and whether it is
+        # visible at all is per-profile UI state: the same build showed the icon
+        # in one QGIS profile and appeared to have none in another.
+        self.iface.addToolBarIcon(self.action)
+
+        self.agent_dock = AgentWorkspaceDock(
+            self.iface,
+            self._current_graph,
+            self.iface.mainWindow(),
+            model_apply=_ModelWindowApplyAdapter(self),
+            external_run_active=self._studio_run_active,
+        )
+        self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.agent_dock)
+        self.agent_dock.hide()
+        agent_icon_path = os.path.join(
+            self.plugin_dir,
+            "icons",
+            "agent_workspace.png",
+        )
+        agent_icon = (
+            QIcon(agent_icon_path)
+            if os.path.exists(agent_icon_path)
+            else QgsApplication.getThemeIcon("/mIconModelInput.svg")
+        )
+        self.agent_action = QAction(
+            agent_icon,
+            "02Agent Smart Modeler - Agent Workspace",
+            self.iface.mainWindow(),
+        )
+        self.agent_action.setObjectName("SmartModelerAgentWorkspaceAction")
+        self.agent_action.setStatusTip(
+            "Open supervised inspections and explicit-approval actions"
+        )
+        self.agent_action.triggered.connect(self.open_agent_workspace)
+        self.iface.addPluginToMenu("02Agent Smart Modeler", self.agent_action)
+        self.iface.addToolBarIcon(self.agent_action)
+
+        self.help_action = QAction(
+            QgsApplication.getThemeIcon("/mActionHelpContents.svg"),
+            "02Agent Smart Modeler - Help and Safety",
+            self.iface.mainWindow(),
+        )
+        self.help_action.setObjectName("SmartModelerHelpAction")
+        self.help_action.setStatusTip(
+            "Open quick start, keyboard, privacy, and support guidance"
+        )
+        self.help_action.triggered.connect(self.open_help)
+        self.iface.addPluginToMenu("02Agent Smart Modeler", self.help_action)
+
+    def unload(self) -> None:
+        if self.processing_provider is not None:
+            QgsApplication.processingRegistry().removeProvider(self.processing_provider)
+            self.processing_provider = None
+        if self.action is not None:
+            self.iface.removePluginMenu("02Agent Smart Modeler", self.action)
+            self.iface.removeToolBarIcon(self.action)
+            self.action.deleteLater()
+            self.action = None
+        if self.agent_action is not None:
+            self.iface.removePluginMenu("02Agent Smart Modeler", self.agent_action)
+            self.iface.removeToolBarIcon(self.agent_action)
+            self.agent_action.deleteLater()
+            self.agent_action = None
+        if self.help_action is not None:
+            self.iface.removePluginMenu(
+                "02Agent Smart Modeler", self.help_action
+            )
+            self.help_action.deleteLater()
+            self.help_action = None
+        if self.help_dialog is not None:
+            self.help_dialog.close()
+            self.help_dialog.deleteLater()
+            self.help_dialog = None
+        if self.agent_dock is not None:
+            self.agent_dock.shutdown()
+            self.iface.removeDockWidget(self.agent_dock)
+            self.agent_dock.deleteLater()
+            self.agent_dock = None
+        if self.window is not None:
+            retiring_window = self.window
+            self.window = None
+            retiring_window.prepare_for_shutdown()
+            self._dispose_window_when_idle(retiring_window)
+        self.translation.remove()
+
+    def _dispose_window_when_idle(self, window: SmartModelerWindow) -> None:
+        """Never delete a window while its synchronous run stack is unwinding.
+
+        This retries itself on a timer, so the window's C++ object can be gone
+        by the time a tick lands -- another teardown path won the race, or QGIS
+        is closing. Touching the dead wrapper then raises out of a Qt slot,
+        which Python surfaces as an unhandled exception during unload. There is
+        nothing left to dispose of in that case, so stop quietly.
+        """
+        try:
+            still_running = bool(window._is_executing)
+        except RuntimeError:
+            return
+        if still_running:
+            QTimer.singleShot(
+                25, lambda: self._dispose_window_when_idle(window)
+            )
+            return
+        with contextlib.suppress(RuntimeError):
+            window.close()
+            window.deleteLater()
+
+    def run(self) -> None:
+        if self.window is None:
+            self.window = SmartModelerWindow(
+                self.iface,
+                self.iface.mainWindow(),
+                external_run_active=self._agent_run_active,
+                agent_request=self._start_model_agent_request,
+                agent_request_error=lambda: getattr(
+                    self, "last_agent_request_error", ""
+                ),
+            )
+        self.window.show()
+        self.window.raise_()
+        self.window.activateWindow()
+
+    def open_agent_workspace(self) -> bool:
+        if self.agent_dock is None:
+            return False
+        self.agent_dock.show()
+        self.agent_dock.raise_()
+        self.agent_dock.prompt_input.setFocus()
+        return True
+
+    def _start_model_agent_request(self, request: str) -> bool:
+        """Route Workflow Studio AI through the shared agentic run loop."""
+        self.last_agent_request_error = ""
+        if self.agent_dock is None or not self.open_agent_workspace():
+            self.last_agent_request_error = (
+                "Agent Workspace is not open. Open it from the 02Agent Smart Modeler "
+                "toolbar, then try again."
+            )
+            return False
+        started = self.agent_dock.start_request(
+            request,
+            AgentMode.ACT,
+            AgentScope.CURRENT_MODEL,
+        )
+        if not started:
+            self.last_agent_request_error = getattr(
+                self.agent_dock, "last_request_error", ""
+            )
+        return started
+
+    def open_ai_connections(self) -> bool:
+        """Open the shared AI profile editor for trusted companion plugins."""
+        if self.agent_dock is not None:
+            self.agent_dock.open_ai_connections()
+            return True
+
+        # A companion plugin can reach this public bridge while 02Agent Smart Modeler's
+        # Processing lifecycle is ready but its dock has not been constructed.
+        # Keep Connections functional instead of returning a silent no-op.
+        from .gui.ai_settings_dialog import AiSettingsDialog
+        from .gui.theme import STUDIO_STYLE
+
+        parent = self.iface.mainWindow() if self.iface is not None else None
+        dialog = AiSettingsDialog(parent)
+        dialog.setStyleSheet(STUDIO_STYLE)
+        dialog.exec()
+        return True
+
+    def agent_connection_info(self) -> dict:
+        """Return display-only profile state without reading an API secret."""
+        from .core.ai_settings import AiSettingsStore, PROVIDERS
+
+        profile = AiSettingsStore().active_profile()
+        provider = PROVIDERS[profile.provider_id]
+        return {
+            "profile_name": profile.name or provider.name,
+            "provider_id": profile.provider_id,
+            "provider_name": provider.name,
+            "model": profile.model,
+            "agent_chat_enabled": profile.provider_id != "offline",
+        }
+
+    def open_help(self) -> None:
+        if self.help_dialog is None:
+            self.help_dialog = HelpDialog(self.iface.mainWindow())
+        self.help_dialog.show()
+        self.help_dialog.raise_()
+        self.help_dialog.activateWindow()
+
+    def _current_graph(self):
+        """Optional model adapter: the live graph, or None when no studio is
+        meaningfully open.
+
+        Returns the studio's own graph object through a callback (never a
+        copy), so the Agent Workspace never holds a stale reference across a
+        studio close/reopen. "Open" means the Workflow Studio window exists
+        and is currently visible: never having run the studio, and having
+        closed/hidden it, both report no current model. Hiding the window
+        never destroys or replaces its graph - the same window instance (and
+        graph) is reused and becomes visible again on the next studio open,
+        at which point the Agent Workspace reports it as available again.
+        """
+        if self.window is None or not self.window.isVisible():
+            return None
+        return self.window.graph
+
+    def _studio_run_active(self) -> bool:
+        return bool(self.window is not None and self.window._is_executing)
+
+    def _agent_run_active(self) -> bool:
+        return bool(
+            self.agent_dock is not None
+            and self.agent_dock.run_coordinator.is_running()
+        )

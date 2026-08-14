@@ -1,0 +1,134 @@
+[CmdletBinding()]
+param(
+    [int]$MatrixRuns = 2,
+    [int]$MatrixLimit = 10,
+    [int]$WorkflowLimit = 6,
+    [int]$HardSeed = 303,
+    [switch]$HardOnly
+)
+
+$ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($env:SMARTMODELER_DEEPSEEK_API_KEY) -and
+    [string]::IsNullOrWhiteSpace($env:DEEPSEEK_API_KEY)) {
+    throw "A DeepSeek API key must already be present in this PowerShell session."
+}
+if (-not $HardOnly -and ($MatrixRuns -lt 1 -or $MatrixRuns -gt 20)) {
+    throw "MatrixRuns must be between 1 and 20."
+}
+if (-not $HardOnly -and ($MatrixLimit -lt 2 -or $MatrixLimit -gt 30)) {
+    throw "MatrixLimit must be between 2 and 30."
+}
+if (-not $HardOnly -and ($WorkflowLimit -lt 1 -or $WorkflowLimit -gt 6)) {
+    throw "WorkflowLimit must be between 1 and 6."
+}
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$qgisPython = "C:\OSGeo4W\bin\python-qgis-ltr.bat"
+if (-not (Test-Path -LiteralPath $qgisPython)) {
+    throw "QGIS LTR runtime was not found at $qgisPython."
+}
+
+# Live acceptance must not read or write the developer's live QGIS profile.
+# A single oversized settings value left there by any installed plugin makes
+# every QSettings.sync() these suites perform take minutes, and a suite that
+# has already passed then never exits.
+$profileRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("deepseek_qgis_profile_" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+New-Item -ItemType Directory -Force -Path $profileRoot | Out-Null
+$env:QGIS_CUSTOM_CONFIG_PATH = $profileRoot
+
+$logDirectory = Join-Path $repoRoot "scratch"
+New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$logPath = Join-Path $logDirectory "deepseek_autotests_$stamp.log"
+$env:QGIS_PLUGINPATH = $repoRoot
+
+$results = [System.Collections.Generic.List[object]]::new()
+
+function Invoke-QgisLiveTest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$ScriptPath
+    )
+
+    Write-Host "`n=== $Name ===" -ForegroundColor Cyan
+    Add-Content -LiteralPath $logPath -Value "`n=== $Name ==="
+    # QGIS/Qt may write benign network diagnostics to stderr (for example
+    # QIODevice::read on a closed QNetworkReply). With the runner's global
+    # Stop policy, PowerShell turns that diagnostic into a terminating native
+    # command error before the child exit code can be recorded. Capture both
+    # streams while this invocation is running and judge the test by exit code.
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $captured = @(& $qgisPython $ScriptPath 2>&1 | Tee-Object -FilePath $logPath -Append)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    $passed = ($exitCode -eq 0)
+    $detail = ""
+    if (-not $passed) {
+        $detail = @(
+            $captured |
+                ForEach-Object { $_.ToString() } |
+                Where-Object { $_ -match "FAIL|RuntimeError|AiResponseError|Error:" } |
+                Select-Object -Last 1
+        ) -join " "
+        if ($detail.Length -gt 180) {
+            $detail = $detail.Substring(0, 180)
+        }
+    }
+    $results.Add([pscustomobject]@{ Name = $Name; Passed = $passed; ExitCode = $exitCode; Detail = $detail })
+    if ($passed) {
+        Write-Host "$($Name): PASS" -ForegroundColor Green
+    } else {
+        Write-Host "$($Name): FAIL (exit $exitCode)" -ForegroundColor Red
+    }
+}
+
+try {
+    $matrixPath = Join-Path $repoRoot "zero2smartmodeler\tests\qgis_deepseek_matrix.py"
+    $hardPath = Join-Path $repoRoot "zero2smartmodeler\tests\qgis_deepseek_hard_live.py"
+    if (-not $HardOnly) {
+        $env:SMARTMODELER_DEEPSEEK_MATRIX_LIMIT = [string]$MatrixLimit
+        for ($run = 1; $run -le $MatrixRuns; $run++) {
+            $env:SMARTMODELER_DEEPSEEK_MATRIX_SEED = [string](1000 + $run * 7919)
+            Invoke-QgisLiveTest "DeepSeek randomized matrix $run/$MatrixRuns" $matrixPath
+        }
+    } else {
+        Write-Host "Skipping randomized matrices (-HardOnly)." -ForegroundColor DarkGray
+    }
+
+    # The matrices above cover one-algorithm work. This one covers the
+    # Workflow Studio patch path, where a request needs several algorithms at
+    # once -- the shape that used to end a run on the first provider slip.
+    $workflowPath = Join-Path $repoRoot "zero2smartmodeler\tests\qgis_deepseek_workflow_live.py"
+    if (-not $HardOnly) {
+        $env:SMARTMODELER_DEEPSEEK_WORKFLOW_LIMIT = [string]$WorkflowLimit
+        $env:SMARTMODELER_DEEPSEEK_WORKFLOW_SEED = [string](2000 + $HardSeed)
+        Invoke-QgisLiveTest "DeepSeek Workflow Studio patches" $workflowPath
+    }
+
+    $env:SMARTMODELER_DEEPSEEK_HARD_SEED = [string]$HardSeed
+    Invoke-QgisLiveTest "DeepSeek hard OSM workflow" $hardPath
+} finally {
+    Remove-Item Env:SMARTMODELER_DEEPSEEK_MATRIX_LIMIT -ErrorAction SilentlyContinue
+    Remove-Item Env:SMARTMODELER_DEEPSEEK_MATRIX_SEED -ErrorAction SilentlyContinue
+    Remove-Item Env:SMARTMODELER_DEEPSEEK_WORKFLOW_LIMIT -ErrorAction SilentlyContinue
+    Remove-Item Env:SMARTMODELER_DEEPSEEK_WORKFLOW_SEED -ErrorAction SilentlyContinue
+    Remove-Item Env:SMARTMODELER_DEEPSEEK_HARD_SEED -ErrorAction SilentlyContinue
+    Remove-Item Env:QGIS_CUSTOM_CONFIG_PATH -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $profileRoot -ErrorAction SilentlyContinue
+}
+
+$failed = @($results | Where-Object { -not $_.Passed })
+Write-Host "`n=== DeepSeek automatic test summary ===" -ForegroundColor Cyan
+$results | Format-Table -AutoSize
+Write-Host "Log: $logPath"
+Write-Host "Passed: $($results.Count - $failed.Count) / $($results.Count)"
+
+if ($failed.Count -gt 0) {
+    exit 1
+}
+exit 0

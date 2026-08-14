@@ -1,0 +1,864 @@
+"""Pure-Python tests for the strict agent_turn provider envelope/parser."""
+from __future__ import annotations
+
+import json
+import unittest
+
+from zero2smartmodeler.core.agent.contracts import AgentToolCall
+from zero2smartmodeler.core.agent.protocol import (
+    ACTION_FINAL,
+    ACTION_TOOL_CALLS,
+    MAX_ARGUMENTS_JSON_CHARS,
+    MAX_ASSISTANT_TEXT_CHARS,
+    MAX_RAW_RESPONSE_CHARS,
+    AgentTurn,
+    ProtocolError,
+    agent_turn_response_schema,
+    parse_agent_turn,
+)
+
+
+def _turn_json(
+    action: str,
+    assistant_text: str = "",
+    tool_calls=None,
+    proposal_kind: str = "none",
+    proposal_json: str = "",
+) -> str:
+    return json.dumps(
+        {
+            "action": action,
+            "assistant_text": assistant_text,
+            "tool_calls": tool_calls if tool_calls is not None else [],
+            "proposal_kind": proposal_kind,
+            "proposal_json": proposal_json,
+        }
+    )
+
+
+class ResponseSchemaTests(unittest.TestCase):
+    def test_schema_is_json_serializable(self) -> None:
+        schema = agent_turn_response_schema(3)
+        json.dumps(schema)  # must not raise
+        self.assertEqual(schema["type"], "object")
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(schema["properties"]["tool_calls"]["maxItems"], 3)
+
+    def test_rejects_non_positive_max_calls(self) -> None:
+        for bad in (0, -1, True, "3"):
+            with self.assertRaises(ProtocolError):
+                agent_turn_response_schema(bad)
+
+
+class ValidTurnParsingTests(unittest.TestCase):
+    def test_valid_final_turn(self) -> None:
+        turn = parse_agent_turn(_turn_json(ACTION_FINAL, "The answer."), 3)
+        self.assertIsInstance(turn, AgentTurn)
+        self.assertTrue(turn.is_final)
+        self.assertEqual(turn.assistant_text, "The answer.")
+        self.assertEqual(turn.tool_calls, ())
+
+    def test_valid_one_call_turn(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{}"}],
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertFalse(turn.is_final)
+        self.assertEqual(len(turn.tool_calls), 1)
+        self.assertIsInstance(turn.tool_calls[0], AgentToolCall)
+        self.assertEqual(turn.tool_calls[0].tool_name, "project.summary")
+
+    def test_valid_multi_call_turn_preserves_order(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "checking",
+            [
+                {"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{}"},
+                {
+                    "call_id": "c2",
+                    "tool_name": "layer.describe",
+                    "arguments_json": json.dumps({"layer_id": "l1"}),
+                },
+            ],
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertEqual([call.call_id for call in turn.tool_calls], ["c1", "c2"])
+        self.assertEqual(turn.tool_calls[1].arguments, {"layer_id": "l1"})
+
+    def test_normalizes_id_name_arguments_provider_shape(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "checking",
+            [
+                {
+                    "id": "provider-1",
+                    "name": "layer.list",
+                    "arguments": {"limit": 20},
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.call_id, "provider-1")
+        self.assertEqual(call.tool_name, "layer.list")
+        self.assertEqual(call.arguments, {"limit": 20})
+
+    def test_missing_provider_call_id_gets_authority_neutral_local_id(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"name": "layer.list", "arguments": {}}],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.call_id, "provider_call_1")
+        self.assertEqual(call.tool_name, "layer.list")
+
+    def test_normalizes_tool_arguments_provider_shape(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "tool": "processing.search",
+                    "arguments": {"query": "osm konak roads"},
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.tool_name, "processing.search")
+        self.assertEqual(call.arguments["query"], "osm konak roads")
+
+    def test_normalizes_name_parameters_provider_shape(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "name": "processing.resolve",
+                    "parameters": {
+                        "algorithm_id": "native:extractbyattribute",
+                    },
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.call_id, "provider_call_1")
+        self.assertEqual(call.tool_name, "processing.resolve")
+        self.assertEqual(
+            call.arguments,
+            {"algorithm_id": "native:extractbyattribute"},
+        )
+
+    def test_normalizes_function_input_provider_shape(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "function": "layer.describe",
+                    "input": {"layer_id": "active-id"},
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.call_id, "provider_call_1")
+        self.assertEqual(call.tool_name, "layer.describe")
+        self.assertEqual(call.arguments, {"layer_id": "active-id"})
+
+    def test_normalizes_kind_marker_provider_shape(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "kind": "function",
+                    "name": "layer.list",
+                    "parameters": {},
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.tool_name, "layer.list")
+        self.assertEqual(call.arguments, {})
+
+    def test_normalizes_standard_nested_function_shape(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "layer.describe",
+                        "arguments": '{"layer_id":"active-id"}',
+                    },
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.tool_name, "layer.describe")
+        self.assertEqual(call.arguments, {"layer_id": "active-id"})
+
+    def test_normalizes_string_function_with_top_level_parameters(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "kind": "function",
+                    "function": "layer.describe",
+                    "parameters": {"layer_id": "active-id"},
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.tool_name, "layer.describe")
+        self.assertEqual(call.arguments, {"layer_id": "active-id"})
+
+    def test_normalizes_nested_function_parameters_shape(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "function": {
+                        "name": "processing.resolve",
+                        "parameters": {
+                            "algorithm_id": "native:extractbyattribute",
+                        },
+                    }
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.tool_name, "processing.resolve")
+        self.assertEqual(
+            call.arguments,
+            {"algorithm_id": "native:extractbyattribute"},
+        )
+
+    def test_normalizes_nested_tool_shape(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "tool": {
+                        "name": "processing.resolve",
+                        "arguments": {"query": "extract by attribute"},
+                    }
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.tool_name, "processing.resolve")
+        self.assertEqual(call.arguments, {"query": "extract by attribute"})
+
+
+class MalformedTurnRejectionTests(unittest.TestCase):
+    def test_oversized_raw_response_is_rejected_before_json_parsing(self) -> None:
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn("x" * (MAX_RAW_RESPONSE_CHARS + 1), 3)
+
+    def test_empty_response_is_rejected(self) -> None:
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn("   ", 3)
+
+    def test_markdown_fenced_response_is_rejected_not_repaired(self) -> None:
+        raw = "```json\n" + _turn_json(ACTION_FINAL, "hi") + "\n```"
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_leading_prose_is_rejected(self) -> None:
+        raw = "Sure, here you go:\n" + _turn_json(ACTION_FINAL, "hi")
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_trailing_prose_is_rejected(self) -> None:
+        raw = _turn_json(ACTION_FINAL, "hi") + "\nHope that helps!"
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_top_level_array_is_rejected(self) -> None:
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn("[]", 3)
+
+    def test_json_substring_extracted_from_prose_is_rejected(self) -> None:
+        raw = "blah " + _turn_json(ACTION_FINAL, "hi") + " blah"
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_invalid_action_is_rejected(self) -> None:
+        raw = json.dumps({"action": "do_it", "assistant_text": "", "tool_calls": []})
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_non_string_assistant_text_is_rejected(self) -> None:
+        raw = json.dumps({"action": ACTION_FINAL, "assistant_text": 5, "tool_calls": []})
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_oversized_assistant_text_is_rejected(self) -> None:
+        raw = _turn_json(ACTION_FINAL, "x" * (MAX_ASSISTANT_TEXT_CHARS + 1))
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_final_with_calls_keeps_the_answer_and_drops_the_calls(self) -> None:
+        # A provider that answers and also repeats the calls it just made is
+        # the same shape the proposal branch already tolerates. Dropping the
+        # calls is authority-reducing -- they are never parsed or executed --
+        # while failing threw away a complete answer that was already written.
+        raw = _turn_json(
+            ACTION_FINAL,
+            "The minimum is 61 and the maximum is 1580.",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{}"}],
+        )
+        turn = parse_agent_turn(raw, 4)
+        self.assertTrue(turn.is_final)
+        self.assertEqual(turn.tool_calls, ())
+        self.assertIn("minimum is 61", turn.assistant_text)
+
+    def test_final_with_calls_and_no_answer_is_still_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_FINAL,
+            "   ",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{}"}],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_tool_calls_with_empty_list_is_rejected(self) -> None:
+        raw = _turn_json(ACTION_TOOL_CALLS, "", [])
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_tool_calls_exceeding_the_per_turn_limit_are_truncated_not_rejected(
+        self,
+    ) -> None:
+        # Running fewer calls than asked cannot widen authority, and rejecting
+        # the turn threw away a correct multi-step plan. The excess is dropped
+        # and counted so the run loop can tell the provider what did not run.
+        calls = [
+            {"call_id": f"c{i}", "tool_name": "project.summary", "arguments_json": "{}"}
+            for i in range(4)
+        ]
+        turn = parse_agent_turn(_turn_json(ACTION_TOOL_CALLS, "", calls), 3)
+        self.assertEqual(len(turn.tool_calls), 3)
+        self.assertEqual([call.call_id for call in turn.tool_calls], ["c0", "c1", "c2"])
+        self.assertEqual(turn.dropped_tool_calls, 1)
+
+    def test_a_batch_within_the_limit_drops_nothing(self) -> None:
+        calls = [
+            {"call_id": f"c{i}", "tool_name": "project.summary", "arguments_json": "{}"}
+            for i in range(3)
+        ]
+        turn = parse_agent_turn(_turn_json(ACTION_TOOL_CALLS, "", calls), 3)
+        self.assertEqual(len(turn.tool_calls), 3)
+        self.assertEqual(turn.dropped_tool_calls, 0)
+
+    def test_an_unknown_top_level_field_is_ignored_not_rejected(self) -> None:
+        # Providers routinely add a stray "reasoning"/"approved" field. Only the
+        # five known keys are ever read, so an extra key cannot widen authority
+        # (`approved` here is never consulted) and must not fail a valid turn.
+        raw = json.dumps(
+            {
+                "action": ACTION_FINAL,
+                "assistant_text": "hi",
+                "tool_calls": [],
+                "approved": True,
+            }
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertTrue(turn.is_final)
+
+    def test_a_missing_optional_field_defaults_to_its_safe_value(self) -> None:
+        # A provider that omits an inapplicable key (a final answer with no
+        # tool_calls) must still parse; the missing key takes its most
+        # restrictive default rather than ending the run.
+        raw = json.dumps({"action": ACTION_FINAL, "assistant_text": "hi"})
+        turn = parse_agent_turn(raw, 3)
+        self.assertTrue(turn.is_final)
+        self.assertEqual(turn.tool_calls, ())
+
+    def test_a_response_without_an_action_is_rejected(self) -> None:
+        raw = json.dumps({"assistant_text": "hi", "tool_calls": []})
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_invalid_provider_call_id_gets_authority_neutral_local_id(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "call_id": "describe_layer#1",
+                    "tool_name": "project.summary",
+                    "arguments_json": "{}",
+                }
+            ],
+        )
+        call = parse_agent_turn(raw, 3).tool_calls[0]
+        self.assertEqual(call.call_id, "provider_call_1")
+        self.assertEqual(call.tool_name, "project.summary")
+
+    def test_repeated_call_id_within_the_turn_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{}"},
+                {"call_id": "c1", "tool_name": "layer.list", "arguments_json": "{}"},
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_non_dotted_tool_name_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "notdotted", "arguments_json": "{}"}],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_unknown_dotted_tool_name_still_parses(self) -> None:
+        # The parser only enforces the dotted shape; whether the tool is
+        # actually registered is the registry's/controller's job, not the
+        # parser's -- an unknown-but-well-shaped tool name must still parse.
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "does.not_exist", "arguments_json": "{}"}],
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertEqual(turn.tool_calls[0].tool_name, "does.not_exist")
+
+    def test_non_object_arguments_json_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": "[1,2]"}],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_invalid_json_arguments_json_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{not json}"}],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_oversized_arguments_json_string_is_rejected(self) -> None:
+        oversized = json.dumps({"query": "x" * MAX_ARGUMENTS_JSON_CHARS})
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "processing.search", "arguments_json": oversized}],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_nested_oversized_arguments_json_is_rejected(self) -> None:
+        arguments_json = json.dumps({"nested": {"list": [{"inner": "x" * 5000}]}})
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": arguments_json}],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_non_finite_arguments_json_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "call_id": "c1",
+                    "tool_name": "project.summary",
+                    "arguments_json": '{"value": NaN}',
+                }
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_unexpected_call_field_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "call_id": "c1",
+                    "tool_name": "project.summary",
+                    "arguments_json": "{}",
+                    "approved": True,
+                }
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_conflicting_tool_aliases_are_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "name": "layer.list",
+                    "tool": "processing.search",
+                    "arguments": {},
+                }
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_conflicting_argument_aliases_are_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "name": "layer.list",
+                    "arguments": {},
+                    "arguments_json": "{}",
+                }
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_parameters_cannot_conflict_with_an_argument_alias(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "name": "layer.list",
+                    "arguments": {},
+                    "parameters": {},
+                }
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_input_cannot_conflict_with_an_argument_alias(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "name": "layer.list",
+                    "arguments": {},
+                    "input": {},
+                }
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_type_and_kind_markers_cannot_both_be_supplied(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "type": "function",
+                    "kind": "function",
+                    "name": "layer.list",
+                    "arguments": {},
+                }
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_unknown_kind_marker_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"kind": "execute", "name": "layer.list", "arguments": {}}],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_unknown_nested_function_field_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [
+                {
+                    "function": {
+                        "name": "layer.list",
+                        "arguments": {},
+                        "approved": True,
+                    }
+                }
+            ],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_missing_call_field_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS, "", [{"call_id": "c1", "tool_name": "project.summary"}]
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_non_string_raw_text_is_rejected(self) -> None:
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(None, 3)  # type: ignore[arg-type]
+
+    def test_invalid_max_tool_calls_per_turn_is_rejected(self) -> None:
+        for bad in (0, -1, True):
+            with self.assertRaises(ProtocolError):
+                parse_agent_turn(_turn_json(ACTION_FINAL, "hi"), bad)
+
+
+class StrictJsonLoadingTests(unittest.TestCase):
+    """Finding 3: duplicate keys and deep nesting must fail closed."""
+
+    def test_duplicate_top_level_key_is_rejected(self) -> None:
+        # Two "action" keys: standard json keeps the last value; the strict
+        # loader must reject the duplicate instead.
+        raw = (
+            '{"action": "tool_calls", "action": "final", '
+            '"assistant_text": "x", "tool_calls": []}'
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_duplicate_key_in_call_object_is_rejected(self) -> None:
+        raw = (
+            '{"action": "tool_calls", "assistant_text": "", "tool_calls": ['
+            '{"call_id": "c1", "call_id": "c1", "tool_name": "a.b", '
+            '"arguments_json": "{}"}]}'
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_duplicate_key_inside_arguments_json_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "a.b", "arguments_json": '{"x": 1, "x": 2}'}],
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_deeply_nested_response_becomes_protocol_error_not_recursion_error(self) -> None:
+        # Valid JSON, well under MAX_RAW_RESPONSE_CHARS, but deep enough to
+        # overflow the decoder's recursion. Must surface as a bounded
+        # ProtocolError, never an uncaught RecursionError.
+        raw = "[" * 20000 + "]" * 20000
+        self.assertLess(len(raw), MAX_RAW_RESPONSE_CHARS)
+        try:
+            with self.assertRaises(ProtocolError):
+                parse_agent_turn(raw, 3)
+        except RecursionError:  # pragma: no cover - the fix must prevent this
+            self.fail("A deeply nested response escaped as RecursionError.")
+
+    def test_deeply_nested_arguments_json_becomes_protocol_error(self) -> None:
+        deep = "[" * 15000 + "]" * 15000
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "a.b", "arguments_json": deep}],
+        )
+        try:
+            with self.assertRaises(ProtocolError):
+                parse_agent_turn(raw, 3)
+        except RecursionError:  # pragma: no cover
+            self.fail("Deeply nested arguments_json escaped as RecursionError.")
+
+
+VALID_MODEL_PATCH_JSON = json.dumps(
+    {
+        "schema_version": 1,
+        "context_token": "tok",
+        "title": "Add a report",
+        "summary": "Adds a summary node",
+        "operations": [{"op": "set_model_metadata", "name": "New", "description": "D"}],
+        "warnings": [],
+    }
+)
+
+VALID_PROCESSING_RUN_JSON = json.dumps(
+    {
+        "schema_version": 1,
+        "context_token": "tok",
+        "algorithm_id": "native:extractbyattribute",
+        "title": "Filter low values",
+        "summary": "Create a temporary layer containing low values.",
+        "inputs": {
+            "INPUT": {"layer": "active-layer"},
+            "FIELD": {
+                "field": "built_intensity_bin",
+                "layer_param": "INPUT",
+            },
+            "OPERATOR": {"enum": 0},
+            "VALUE": {"string": "low"},
+        },
+        "warnings": [],
+    }
+)
+
+
+class ProposalProtocolTests(unittest.TestCase):
+    def test_schema_has_exactly_five_required_fields(self) -> None:
+        schema = agent_turn_response_schema(3)
+        self.assertEqual(
+            set(schema["required"]),
+            {"action", "assistant_text", "tool_calls", "proposal_kind", "proposal_json"},
+        )
+        self.assertEqual(
+            set(schema["properties"]["proposal_kind"]["enum"]),
+            {
+                "none",
+                "model_patch",
+                "layer_style",
+                "processing_run",
+                "model_run",
+                "plugin_action",
+                "sql_run",
+                "trusted_script_run",
+                "python_run",
+                "workspace_patch",
+            },
+        )
+
+    def test_valid_proposal_turn_parses(self) -> None:
+        raw = _turn_json(
+            "proposal", "Here is a patch.", proposal_kind="model_patch", proposal_json=VALID_MODEL_PATCH_JSON
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertTrue(turn.is_proposal)
+        self.assertEqual(turn.proposal_kind, "model_patch")
+        self.assertIsNotNone(turn.proposal)
+
+    def test_processing_proposal_kind_alias_is_normalized(self) -> None:
+        raw = _turn_json(
+            "proposal",
+            "The filter is ready.",
+            proposal_kind="processing",
+            proposal_json=VALID_PROCESSING_RUN_JSON,
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertTrue(turn.is_proposal)
+        self.assertEqual(turn.proposal_kind, "processing_run")
+
+    def test_run_proposal_kind_alias_is_normalized(self) -> None:
+        raw = _turn_json(
+            "proposal",
+            "Run ready.",
+            proposal_kind="run",
+            proposal_json=VALID_PROCESSING_RUN_JSON,
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertEqual(turn.proposal_kind, "processing_run")
+        self.assertEqual(turn.proposal.algorithm_id, "native:extractbyattribute")
+
+    def test_a_final_turn_without_proposal_keys_parses(self) -> None:
+        # A final answer that omits proposal_kind/proposal_json is normal; the
+        # defaults ("none"/"") describe exactly a non-proposal turn.
+        raw = json.dumps({"action": "final", "assistant_text": "hi", "tool_calls": []})
+        turn = parse_agent_turn(raw, 3)
+        self.assertTrue(turn.is_final)
+
+    def test_tool_calls_marker_with_complete_proposal_is_normalized(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "The filter is ready.",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{}"}],
+            proposal_kind="processing",
+            proposal_json=VALID_PROCESSING_RUN_JSON,
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertTrue(turn.is_proposal)
+        self.assertEqual(turn.tool_calls, ())
+        self.assertEqual(turn.proposal_kind, "processing_run")
+        self.assertEqual(turn.proposal.algorithm_id, "native:extractbyattribute")
+
+    def test_tool_calls_marker_with_partial_proposal_is_rejected(self) -> None:
+        raw = _turn_json(
+            ACTION_TOOL_CALLS,
+            "",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{}"}],
+            proposal_kind="model_patch",
+            proposal_json="",
+        )
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_final_with_a_complete_proposal_is_normalized_to_proposal(self) -> None:
+        raw = _turn_json(
+            ACTION_FINAL, "done", proposal_kind="model_patch", proposal_json=VALID_MODEL_PATCH_JSON
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertTrue(turn.is_proposal)
+        self.assertEqual(turn.proposal_kind, "model_patch")
+
+    def test_proposal_discards_repeated_tool_calls_without_executing_them(self) -> None:
+        raw = _turn_json(
+            "proposal",
+            "here",
+            [{"call_id": "c1", "tool_name": "project.summary", "arguments_json": "{}"}],
+            proposal_kind="model_patch",
+            proposal_json=VALID_MODEL_PATCH_JSON,
+        )
+        turn = parse_agent_turn(raw, 3)
+        self.assertTrue(turn.is_proposal)
+        self.assertEqual(turn.tool_calls, ())
+        self.assertEqual(turn.proposal_kind, "model_patch")
+
+    def test_proposal_kind_none_for_proposal_action_rejected(self) -> None:
+        raw = _turn_json("proposal", "here", proposal_kind="none", proposal_json=VALID_MODEL_PATCH_JSON)
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_empty_proposal_json_rejected(self) -> None:
+        raw = _turn_json("proposal", "here", proposal_kind="model_patch", proposal_json="")
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_proposal_json_non_object_rejected(self) -> None:
+        raw = _turn_json("proposal", "here", proposal_kind="model_patch", proposal_json="[1,2]")
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_unknown_proposal_kind_rejected(self) -> None:
+        raw = _turn_json("proposal", "here", proposal_kind="free_form", proposal_json="{}")
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_duplicate_key_inside_proposal_json_rejected(self) -> None:
+        bad = (
+            '{"schema_version": 1, "schema_version": 1, "context_token": "t", '
+            '"title": "a", "summary": "b", "operations": [], "warnings": []}'
+        )
+        raw = _turn_json("proposal", "here", proposal_kind="model_patch", proposal_json=bad)
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+    def test_malformed_proposal_never_reaches_runtime(self) -> None:
+        # A structurally invalid proposal fails at parse time -> ProtocolError,
+        # so no proposal object is ever produced for the runtime validator.
+        bad = json.dumps(
+            {"schema_version": 2, "context_token": "t", "title": "a", "summary": "b", "operations": [], "warnings": []}
+        )
+        raw = _turn_json("proposal", "here", proposal_kind="model_patch", proposal_json=bad)
+        with self.assertRaises(ProtocolError):
+            parse_agent_turn(raw, 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
