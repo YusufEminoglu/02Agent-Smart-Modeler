@@ -432,7 +432,7 @@ actions.
 ## Support
 
 Report reproducible bugs and feature requests at the
-[02Agent Smart Modeler issue tracker](https://gitlab.com/geospacephilo/EasyFillet/-/issues).
+[02Agent Smart Modeler issue tracker](https://github.com/YusufEminoglu/02Agent-Smart-Modeler/issues).
 Include QGIS and plugin versions, exact steps, and relevant Processing log
 messages. Remove private paths, data-source details, and credentials first.
 
