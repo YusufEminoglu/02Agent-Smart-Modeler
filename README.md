@@ -3,13 +3,13 @@
 [![QGIS](https://img.shields.io/badge/QGIS-3.44%2B%20%7C%204.0%2B-589632.svg)](https://qgis.org)
 [![Release](https://img.shields.io/badge/release-1.5.28-2f80ed.svg)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
-[![Documentation](https://img.shields.io/badge/📖_Reference_Manual-13a0a0)](https://geophilo.pages.dev/zero2smartmodeler/)
+[![Documentation](https://img.shields.io/badge/📖_Reference_Manual-13a0a0)](https://geophilo.com/zero2smartmodeler/)
 
 02Agent Smart Modeler is a QGIS 3.44+ and QGIS 4 visual studio for building and running real QGIS Processing workflows. It combines a typed node canvas, live algorithm discovery, validated AI planning, native `.model3` interchange, and a focused Qt5/Qt6 interface.
 
 ## 📖 Documentation
 
-**[Comprehensive Academic Reference Manual](https://geophilo.pages.dev/zero2smartmodeler/)** — OSM algorithms, Workflow Studio, AI agent architecture, workflow patterns, and 83 DOI-verified academic references. Hosted on Web Documentation.
+**[Comprehensive Academic Reference Manual](https://geophilo.com/zero2smartmodeler/)** — OSM algorithms, Workflow Studio, AI agent architecture, workflow patterns, and 83 DOI-verified academic references. Hosted on Web Documentation.
 
 Version 1.5.28 is the current production release. Every action proposed by a connected
 provider remains inert until it passes local validation and the user explicitly
