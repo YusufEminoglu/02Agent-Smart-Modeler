@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.55] - 2026-09-06
+
+- Migrate repository and documentation URLs to GitLab and Cloudflare Pages.
+
 ## [1.5.54] - 2026-08-14
 
 ### Rebrand: SmartModeler GIS is now 02Agent Smart Modeler
