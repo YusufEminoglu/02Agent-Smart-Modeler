@@ -92,7 +92,14 @@ class SmartProposalBar(QFrame):
                 proposal.target_port_id,
             )
         )
-        for proposal in proposals[:5]:
+        seen = set()
+        unique_proposals = []
+        for proposal in proposals:
+            key = (proposal.alg_id, proposal.target_port_id)
+            if key not in seen:
+                seen.add(key)
+                unique_proposals.append(proposal)
+        for proposal in unique_proposals[:5]:
             self._add_recommendation(proposal)
-        if not proposals:
+        if not unique_proposals:
             self.show_default_proposals()

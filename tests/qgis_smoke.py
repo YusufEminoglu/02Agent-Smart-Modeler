@@ -917,20 +917,27 @@ def run_checks() -> str:
         icon_path = plugin_root / "zero2smartmodeler" / "icons" / "icon.png"
         icon = QIcon(str(icon_path))
         icon_image = QImage(str(icon_path))
+        icon_w = icon_image.size().width()
+        icon_h = icon_image.size().height()
         transparent_pixels = sum(
             1
-            for y in range(icon_image.height())
-            for x in range(icon_image.width())
+            for y in range(icon_h)
+            for x in range(icon_w)
             if icon_image.pixelColor(x, y).alpha() == 0
         )
         if (
-            icon_image.size().width() != 64
-            or icon_image.size().height() != 64
+            icon_w < 64
+            or icon_w != icon_h
             or not icon_image.hasAlphaChannel()
-            or transparent_pixels < 2_048
+            or transparent_pixels < (icon_w * icon_h) // 8
             or any(
                 icon_image.pixelColor(x, y).alpha() != 0
-                for x, y in ((0, 0), (63, 0), (0, 63), (63, 63))
+                for x, y in (
+                    (0, 0),
+                    (icon_w - 1, 0),
+                    (0, icon_h - 1),
+                    (icon_w - 1, icon_h - 1),
+                )
             )
         ):
             raise RuntimeError(

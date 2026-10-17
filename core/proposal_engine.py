@@ -70,6 +70,46 @@ class SmartProposalEngine:
                 "targets": ("INPUT",),
                 "weight": 74,
             },
+            {
+                "alg_id": "native:dissolve",
+                "title": "Dissolve",
+                "category": "Vector Geometry",
+                "description": "Merge adjacent or matching vector features.",
+                "targets": ("INPUT",),
+                "weight": 70,
+            },
+            {
+                "alg_id": "native:reprojectlayer",
+                "title": "Reproject Layer",
+                "category": "Vector General",
+                "description": "Transform features into a target metric CRS.",
+                "targets": ("INPUT",),
+                "weight": 66,
+            },
+            {
+                "alg_id": "native:fixgeometries",
+                "title": "Fix Geometries",
+                "category": "Vector Geometry",
+                "description": "Repair invalid polygon or line geometries.",
+                "targets": ("INPUT",),
+                "weight": 62,
+            },
+            {
+                "alg_id": "native:intersection",
+                "title": "Intersection",
+                "category": "Vector Overlay",
+                "description": "Compute geometric intersection with an overlay layer.",
+                "targets": ("INPUT",),
+                "weight": 58,
+            },
+            {
+                "alg_id": "native:convexhull",
+                "title": "Convex Hull",
+                "category": "Vector Geometry",
+                "description": "Calculate convex hulls for features.",
+                "targets": ("INPUT",),
+                "weight": 54,
+            },
         ),
         SocketType.RASTER: (
             {
@@ -96,6 +136,30 @@ class SmartProposalEngine:
                 "targets": ("INPUT",),
                 "weight": 84,
             },
+            {
+                "alg_id": "native:hillshade",
+                "title": "Hillshade",
+                "category": "Raster Terrain",
+                "description": "Render terrain relief shading from this raster.",
+                "targets": ("INPUT",),
+                "weight": 80,
+            },
+            {
+                "alg_id": "native:rastersampling",
+                "title": "Sample Raster Values",
+                "category": "Raster Analysis",
+                "description": "Sample this raster at point locations.",
+                "targets": ("RASTERCOPY",),
+                "weight": 74,
+            },
+            {
+                "alg_id": "native:zonalstatisticsfb",
+                "title": "Zonal Statistics",
+                "category": "Raster Analysis",
+                "description": "Summarize raster values inside polygon zones.",
+                "targets": ("INPUT_RASTER",),
+                "weight": 70,
+            },
         ),
         SocketType.NUMBER: (
             {
@@ -105,6 +169,102 @@ class SmartProposalEngine:
                 "description": "Use this value as a buffer distance.",
                 "targets": ("DISTANCE",),
                 "weight": 100,
+            },
+            {
+                "alg_id": "native:simplifygeometries",
+                "title": "Simplify tolerance",
+                "category": "Vector Geometry",
+                "description": "Use this value as a geometry simplification tolerance.",
+                "targets": ("TOLERANCE",),
+                "weight": 85,
+            },
+            {
+                "alg_id": "native:voronoipolygons",
+                "title": "Voronoi buffer",
+                "category": "Vector Geometry",
+                "description": "Use this value as the Voronoi extent buffer percentage.",
+                "targets": ("BUFFER",),
+                "weight": 78,
+            },
+        ),
+        SocketType.EXTENT: (
+            {
+                "alg_id": "smartmodeler:osm_download_polygons",
+                "title": "Download OSM Polygons",
+                "category": "OpenStreetMap",
+                "description": "Download OSM polygons inside this extent.",
+                "targets": ("EXTENT",),
+                "weight": 100,
+            },
+            {
+                "alg_id": "smartmodeler:osm_download_lines",
+                "title": "Download OSM Lines",
+                "category": "OpenStreetMap",
+                "description": "Download OSM lines inside this extent.",
+                "targets": ("EXTENT",),
+                "weight": 92,
+            },
+            {
+                "alg_id": "smartmodeler:osm_download_points",
+                "title": "Download OSM Points",
+                "category": "OpenStreetMap",
+                "description": "Download OSM points inside this extent.",
+                "targets": ("EXTENT",),
+                "weight": 86,
+            },
+            {
+                "alg_id": "native:extractbyextent",
+                "title": "Extract by Extent",
+                "category": "Vector Selection",
+                "description": "Clip or extract features inside this extent.",
+                "targets": ("EXTENT",),
+                "weight": 80,
+            },
+        ),
+        SocketType.CRS: (
+            {
+                "alg_id": "native:reprojectlayer",
+                "title": "Reproject Layer",
+                "category": "Vector General",
+                "description": "Use this coordinate reference system as the target CRS.",
+                "targets": ("TARGET_CRS",),
+                "weight": 100,
+            },
+        ),
+        SocketType.FIELD: (
+            {
+                "alg_id": "native:dissolve",
+                "title": "Dissolve by Field",
+                "category": "Vector Geometry",
+                "description": "Dissolve features sharing this attribute field.",
+                "targets": ("FIELD",),
+                "weight": 96,
+            },
+            {
+                "alg_id": "native:extractbyattribute",
+                "title": "Extract by Attribute",
+                "category": "Vector Selection",
+                "description": "Filter features using this attribute field.",
+                "targets": ("FIELD",),
+                "weight": 90,
+            },
+        ),
+        SocketType.STRING: (
+            {
+                "alg_id": "native:extractbyexpression",
+                "title": "Extract by Expression",
+                "category": "Vector Selection",
+                "description": "Use this string as a filter expression.",
+                "targets": ("EXPRESSION",),
+                "weight": 92,
+            },
+            {
+                "alg_id": "native:extractbyattribute",
+                "title": "Extract by Attribute",
+                "category": "Vector Selection",
+                "description": "Use this string as the attribute comparison value.",
+                "targets": ("VALUE",),
+                "weight": 86,
             },
         ),
     }
@@ -137,6 +297,11 @@ class SmartProposalEngine:
                 continue
             base_score = int(rule.get("weight", 0))
             score = base_score + (15 if target.required else 0)
+            if (
+                source_node is not None
+                and source_node.algorithm_id == algorithm_id
+            ):
+                score -= 12
             source_label = (
                 f"{source_node.title}.{port.name}"
                 if source_node is not None
@@ -164,6 +329,7 @@ class SmartProposalEngine:
             proposals,
             key=lambda item: (-item.score, item.title.lower(), item.alg_id),
         )
+
 
     @staticmethod
     def _best_target(

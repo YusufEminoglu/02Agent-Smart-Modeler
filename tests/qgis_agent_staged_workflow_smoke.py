@@ -61,7 +61,7 @@ def _extent_layer() -> QgsVectorLayer:
 
 def _seed_osm_response(layer: QgsVectorLayer) -> None:
     from zero2agent_osm_downloader.core.query import TagSpec, build_query
-    from zero2agent_osm_downloader.processing.osm_algorithms import _CACHE
+    from zero2agent_osm_downloader.processing.osm_algorithms import _cache
 
     bbox = layer.extent()
     query = build_query(
@@ -96,7 +96,7 @@ def _seed_osm_response(layer: QgsVectorLayer) -> None:
                 ],
             }
         )
-    _CACHE[query] = (time.monotonic(), {"elements": elements})
+    _cache().set(query, {"elements": elements})
 
 
 def _activate_sibling_plugin(plugins_root: str):

@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.6.0] - 2026-10-17
+
+- Redesign plugin and Agent Workspace icons (`icons/icon.png` and `icons/agent_workspace.png`) to the circular deep-teal 3D studio diorama brand language (512x512 RGBA, zero outer margin).
+- Expand `SmartProposalEngine` rules across `VECTOR`, `RASTER`, `NUMBER`, `EXTENT`, `CRS`, `FIELD`, and `STRING` sockets, demote immediate self-loop recommendations, and deduplicate multi-output port suggestions in `SmartProposalBar`.
+- Upgrade `AutoLayoutEngine` to compute longest-path topological ranks including `node.dependencies`, sort rank columns by parent barycenter to reduce wire crossings, and prevent overlapping sibling node placement.
+- Enhance built-in `smartmodeler:osm_download_*` algorithms with `QgsGeometry.polygonize` open-way multipolygon ring assembly, `area=yes/no` closed-way disambiguation, and expanded urban planning attribute columns (`waterway`, `water`, `railway`, `cycleway`, `emergency`, `healthcare`, `man_made`, `historic`).
+- Improve `NodeGraphicsItem` with case-insensitive semantic category header colors across QGIS Processing groups, elided title and port labels, and visual styling for inactive, `skipped`, and `canceled` nodes.
+- Sync companion `zero2agent_osm_downloader` cache seeding in staged/chained QGIS test harnesses and align `plugins.toml` registry metadata (`processing = true` and complete `tests_pure` inventory).
+
 ## [1.5.56] - 2026-09-16
 
 - Redesign plugin icon to high-end 3D tactile brand design with circular teal pedestal, zero margin, and refreshed documentation links.

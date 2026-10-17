@@ -45,7 +45,7 @@ from ..core.osm_query import (
 )
 
 USER_AGENT = (
-    "02Agent Smart Modeler-GIS-QGIS-Plugin/0.15 "
+    "02Agent Smart Modeler-GIS-QGIS-Plugin/1.6.0 "
     "(https://github.com/YusufEminoglu/02Agent-Smart-Modeler)"
 )
 _SESSION_CACHE: Dict[str, tuple] = {}
@@ -147,13 +147,28 @@ def _points(coordinates: object) -> List[QgsPointXY]:
     return points
 
 
-def _closed_ring(coordinates: object) -> List[QgsPointXY]:
+def _closed_ring(coordinates: object, require_closed: bool = False) -> List[QgsPointXY]:
     ring = _points(coordinates)
     if len(ring) < 3:
         return []
     if ring[0] != ring[-1]:
+        if require_closed:
+            return []
         ring.append(QgsPointXY(ring[0]))
     return ring if len(ring) >= 4 else []
+
+
+def _polygonize_open_ways(lines: List[QgsGeometry]) -> List[QgsGeometry]:
+    if not lines:
+        return []
+    polygonized = QgsGeometry.polygonize(lines)
+    if polygonized is None or polygonized.isEmpty():
+        return []
+    polygons: List[QgsGeometry] = []
+    for part in polygonized.asGeometryCollection():
+        if part is not None and not part.isEmpty():
+            polygons.append(part)
+    return polygons
 
 
 def _relation_polygon(element: Dict) -> Optional[QgsGeometry]:
@@ -162,19 +177,32 @@ def _relation_polygon(element: Dict) -> Optional[QgsGeometry]:
         return None
     outers: List[QgsGeometry] = []
     inners: List[QgsGeometry] = []
+    open_outer_lines: List[QgsGeometry] = []
+    open_inner_lines: List[QgsGeometry] = []
     for member in members:
         if not isinstance(member, dict) or member.get("type") != "way":
             continue
-        ring = _closed_ring(member.get("geometry"))
-        if not ring:
+        coords = member.get("geometry")
+        ring = _closed_ring(coords, require_closed=True)
+        role = member.get("role")
+        if ring:
+            polygon = QgsGeometry.fromPolygonXY([ring])
+            if not polygon.isEmpty():
+                if role == "inner":
+                    inners.append(polygon)
+                else:
+                    outers.append(polygon)
             continue
-        polygon = QgsGeometry.fromPolygonXY([ring])
-        if polygon.isEmpty():
-            continue
-        if member.get("role") == "inner":
-            inners.append(polygon)
-        else:
-            outers.append(polygon)
+        pts = _points(coords)
+        if len(pts) >= 2:
+            line = QgsGeometry.fromPolylineXY(pts)
+            if not line.isEmpty():
+                if role == "inner":
+                    open_inner_lines.append(line)
+                else:
+                    open_outer_lines.append(line)
+    outers.extend(_polygonize_open_ways(open_outer_lines))
+    inners.extend(_polygonize_open_ways(open_inner_lines))
     if not outers:
         return None
     geometry = QgsGeometry.unaryUnion(outers)
@@ -188,6 +216,7 @@ def _relation_polygon(element: Dict) -> Optional[QgsGeometry]:
 
 def _geometry(element: Dict, kind: str) -> Optional[QgsGeometry]:
     element_type = element.get("type")
+    tags = element.get("tags") if isinstance(element.get("tags"), dict) else {}
     if kind == "point":
         if element_type != "node":
             return None
@@ -200,11 +229,15 @@ def _geometry(element: Dict, kind: str) -> Optional[QgsGeometry]:
     if kind == "line":
         if element_type != "way":
             return None
+        if str(tags.get("area", "")).strip().casefold() == "yes":
+            return None
         points = _points(element.get("geometry"))
         return QgsGeometry.fromPolylineXY(points) if len(points) >= 2 else None
     if element_type == "relation":
         return _relation_polygon(element)
     if element_type != "way":
+        return None
+    if str(tags.get("area", "")).strip().casefold() == "no":
         return None
     ring = _closed_ring(element.get("geometry"))
     if not ring:
@@ -228,9 +261,17 @@ def _fields() -> QgsFields:
         "landuse",
         "leisure",
         "natural",
+        "waterway",
+        "water",
+        "railway",
         "public_transport",
+        "cycleway",
+        "emergency",
+        "healthcare",
         "shop",
         "tourism",
+        "man_made",
+        "historic",
         "height",
         "building_levels",
         "tags_json",
@@ -253,13 +294,22 @@ def _attributes(element: Dict, key: str, value: str) -> List[str]:
         str(tags.get("landuse", "")),
         str(tags.get("leisure", "")),
         str(tags.get("natural", "")),
+        str(tags.get("waterway", "")),
+        str(tags.get("water", "")),
+        str(tags.get("railway", "")),
         str(tags.get("public_transport", "")),
+        str(tags.get("cycleway", "")),
+        str(tags.get("emergency", "")),
+        str(tags.get("healthcare", "")),
         str(tags.get("shop", "")),
         str(tags.get("tourism", "")),
+        str(tags.get("man_made", "")),
+        str(tags.get("historic", "")),
         str(tags.get("height", "")),
         str(tags.get("building:levels", "")),
         compact_tags(tags),
     ]
+
 
 
 class _DownloadOsmAlgorithm(QgsProcessingAlgorithm):
