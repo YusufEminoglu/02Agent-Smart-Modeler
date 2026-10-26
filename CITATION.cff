@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Eminoglu"
+    given-names: "Yusuf"
+    email: "yusuf.eminoglu@deu.edu.tr"
+    orcid: "https://orcid.org/0009-0005-6000-2934"
+title: "02Agent Smart Modeler"
+version: "1.7.0"
+date-released: "2026-10-26"
+url: "https://github.com/YusufEminoglu/02Agent-Smart-Modeler"
+abstract: "Build and run QGIS Processing workflows on a visual canvas: start from 21 ready workflows, open your existing QGIS models in one click, run a workflow on every layer at once, and save it for the QGIS Model Designer or as Python."
