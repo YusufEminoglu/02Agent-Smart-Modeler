@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.7.0] - 2026-10-26
+
+### Added
+
+- **Start page.** An empty workflow now opens on a start page instead of a
+  blank grid: ready workflows as a gallery (everyday tasks and urban-analytics
+  showcases, the unavailable ones listed with the plugin they need instead of
+  silently missing), **your QGIS models** from the profile's Processing models
+  folder(s) in one click, and recent workflows. It steps aside as soon as the
+  workflow has a node and returns on New.
+- **Six everyday starter workflows**, built only from QGIS's own algorithms so
+  they are always available: Dissolve features, Count points in polygons,
+  Distance to the nearest feature, Raster statistics per zone, Repair and
+  reproject, Catchment by distance. 21 starters in all.
+- **Run for each layer.** Pick the input to vary and tick project layers; the
+  workflow runs once per layer, one after another in the background, each
+  result named after its layer and all of them collected in one layer-tree
+  group, with a per-layer summary. The varied input is restored afterwards.
+- **Open recent** in the toolbar and on the start page (last eight workflows
+  opened or saved; missing files are hidden).
+
+### Changed
+
+- Hub description, about text and tags describe what the plugin does for the
+  user (model designer, workflow, automation, batch, no-code, model3).
+- README: a four-step quick start; the release badge, stuck at 1.5.28, now
+  shows the current version.
+
 ## [1.6.0] - 2026-10-17
 
 - Redesign plugin and Agent Workspace icons (`icons/icon.png` and `icons/agent_workspace.png`) to the circular deep-teal 3D studio diorama brand language (512x512 RGBA, zero outer margin).

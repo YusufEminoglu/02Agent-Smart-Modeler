@@ -61,7 +61,7 @@ def run_checks() -> str:
             preset_list.item(index).text()
             for index in range(preset_list.count())
         ]
-        if len(preset_names) != 15 or not all(
+        if len(preset_names) != 21 or not all(
             name.startswith("Showcase · ") and " nodes" in name
             for name in preset_names[:10]
         ):

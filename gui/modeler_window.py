@@ -13,9 +13,11 @@ from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QSplitter,
+    QStackedWidget,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -41,11 +43,14 @@ from ..core.execution_engine import (
     ExecutionStatus,
     GraphExecutionEngine,
 )
-from ..core.graph_model import GraphIssue, GraphModel, NodeDefinition
+from ..core import recent_files
+from ..core.graph_model import GraphIssue, GraphModel, NodeDefinition, SocketType
 from ..core.model3_serializer import Model3Serializer
+from ..core.model_library import list_models, model_folders
 from ..core.prompt_context import PromptContextLoader
 from ..core.proposal_engine import ProposalRecommendation
 from .ai_prompt_widget import AiPromptWidget
+from .batch_dialog import BatchRunDialog
 from .branding import build_brand_header
 from .canvas_scene import CanvasScene
 from .canvas_view import CanvasView
@@ -54,6 +59,7 @@ from .node_parameter_dialog import NodeParameterDialog
 from .node_palette_widget import NodePaletteWidget
 from .model_properties_dialog import ModelPropertiesDialog
 from .smart_proposal_bar import SmartProposalBar
+from .start_page import StartPage
 from .theme import STUDIO_STYLE
 from .wire_inspector_widget import WireInspectorWidget
 
@@ -115,6 +121,8 @@ class SmartModelerWindow(QMainWindow):
         self._history_suspended = False
         self._force_close = False
         self._execution_action_states = {}
+        self._start_dismissed = False
+        self._batch = None
 
         self._build_ui()
         self._connect_permanent_signals()
@@ -126,6 +134,7 @@ class SmartModelerWindow(QMainWindow):
         self._autosave_timer.timeout.connect(self._write_recovery_snapshot)
         self._autosave_timer.start()
         self._update_document_ui()
+        self._populate_start_page()
         QTimer.singleShot(0, self._offer_recovery)
 
     def _build_ui(self) -> None:
@@ -159,7 +168,14 @@ class SmartModelerWindow(QMainWindow):
             "selected node, and F fits the graph when the canvas has focus."
         )
         self.splitter.addWidget(self.palette_widget)
-        self.splitter.addWidget(self.view)
+        # The canvas shares its slot with a start page: an empty workflow
+        # shows ready workflows, QGIS models and recent files instead of a
+        # blank grid, and the canvas returns as soon as there is a node.
+        self.start_page = StartPage(self)
+        self.canvas_stack = QStackedWidget()
+        self.canvas_stack.addWidget(self.start_page)
+        self.canvas_stack.addWidget(self.view)
+        self.splitter.addWidget(self.canvas_stack)
         self.splitter.addWidget(self.inspector_widget)
         self.splitter.setCollapsible(1, False)
         self.splitter.setSizes([285, 870, 285])
@@ -236,6 +252,14 @@ class SmartModelerWindow(QMainWindow):
         self.cancel_run_action.setEnabled(False)
         self.cancel_run_action.triggered.connect(self.cancel_model)
         toolbar.addAction(self.cancel_run_action)
+        self.batch_action = QAction(
+            self._theme_icon("/mActionRefresh.svg"), "Run for each layer", self
+        )
+        self.batch_action.setStatusTip(
+            "Run the workflow once per chosen project layer and collect the results"
+        )
+        self.batch_action.triggered.connect(self.run_for_each_layer)
+        toolbar.addAction(self.batch_action)
 
         setup_action = QAction(
             self._theme_icon("/mActionEditTable.svg"), "Run setup", self
@@ -284,6 +308,17 @@ class SmartModelerWindow(QMainWindow):
         open_action.setStatusTip("Open 02Agent Smart Modeler JSON or a QGIS model")
         open_action.triggered.connect(self.import_model)
         toolbar.addAction(open_action)
+        self.recent_menu = QMenu("Open recent", self)
+        self.recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
+        self.recent_action = QAction(
+            self._theme_icon("/mActionFileOpen.svg"), "Open recent", self
+        )
+        self.recent_action.setStatusTip("Open a workflow you opened or saved recently")
+        self.recent_action.setMenu(self.recent_menu)
+        self.recent_action.triggered.connect(
+            lambda: self.recent_menu.exec(self.cursor().pos())
+        )
+        toolbar.addAction(self.recent_action)
         self.save_action = QAction(
             self._theme_icon("/mActionFileSave.svg"), "Save", self
         )
@@ -369,6 +404,11 @@ class SmartModelerWindow(QMainWindow):
         self.ai_prompt_bar.prompt_submitted.connect(self.generate_ai_graph)
         self.palette_widget.node_requested.connect(self.add_node_by_alg)
         self.palette_widget.package_requested.connect(self.load_preset_package)
+        self.start_page.starter_requested.connect(self._start_with_starter)
+        self.start_page.path_requested.connect(self._start_with_path)
+        self.start_page.blank_requested.connect(self._start_blank)
+        self.start_page.open_requested.connect(self.import_model)
+        self.start_page.describe_requested.connect(self._start_describe)
         self.proposal_bar.algorithm_selected.connect(self.add_node_by_alg)
         self.proposal_bar.proposal_selected.connect(self.apply_smart_proposal)
         self.inspector_widget.configure_requested.connect(self.configure_node)
@@ -429,6 +469,7 @@ class SmartModelerWindow(QMainWindow):
         if old_scene is not self.scene:
             old_scene.deleteLater()
         self._sync_ai_workflow_state()
+        self._refresh_start_page()
         if fit:
             QTimer.singleShot(0, self.fit_graph)
 
@@ -460,6 +501,7 @@ class SmartModelerWindow(QMainWindow):
         changed = self.document_history.record(snapshot)
         if changed:
             self._update_document_ui()
+        self._refresh_start_page()
         return changed
 
     def _restore_document_snapshot(self, snapshot: str) -> bool:
@@ -1158,6 +1200,9 @@ class SmartModelerWindow(QMainWindow):
             self.progress.hide()
         if self._force_close:
             return
+        if self._batch is not None:
+            self._batch_step_done(report)
+            return
         self._show_execution_report(report)
 
     def _show_execution_report(self, report: ExecutionReport) -> None:
@@ -1319,6 +1364,7 @@ class SmartModelerWindow(QMainWindow):
             self.document_history.mark_clean()
             self._clear_recovery_snapshot()
             self._update_document_ui()
+            self._remember_recent(str(path))
             self.status_label.setText(f"Saved {path}")
         else:
             self.status_label.setText(f"Exported {path}")
@@ -1419,6 +1465,10 @@ class SmartModelerWindow(QMainWindow):
         )
         if not path:
             return
+        self.open_path(path)
+
+    def open_path(self, path: str) -> bool:
+        """Open a workflow file; True when it replaced the current one."""
         if path.lower().endswith(".model3"):
             try:
                 graph, error = Model3Serializer.import_from_model3(path)
@@ -1432,9 +1482,9 @@ class SmartModelerWindow(QMainWindow):
                 graph, error = None, str(file_error)
         if graph is None:
             QMessageBox.critical(self, "Open failed", error)
-            return
+            return False
         if not self._confirm_replace("open this workflow"):
-            return
+            return False
         self._set_graph(graph)
         self._current_path = Path(path)
         self._current_filter = (
@@ -1447,7 +1497,244 @@ class SmartModelerWindow(QMainWindow):
         )
         self._clear_recovery_snapshot()
         self._update_document_ui()
+        self._remember_recent(path)
         self.status_label.setText(f"Opened {path}")
+        return True
+
+    # ------------------------------------------------------------------ #
+    # Start page, recent files and QGIS models
+    # ------------------------------------------------------------------ #
+    RECENT_SETTING = "SmartModelerGIS/RecentWorkflows"
+
+    def _refresh_start_page(self) -> None:
+        if not hasattr(self, "canvas_stack"):
+            return
+        show_start = not self.graph.nodes and not self._start_dismissed
+        target = self.start_page if show_start else self.view
+        if self.canvas_stack.currentWidget() is not target:
+            if show_start:
+                self._populate_start_page()
+            self.canvas_stack.setCurrentWidget(target)
+
+    def _populate_start_page(self) -> None:
+        from ..core.micro_packages import MicroPackageCatalog, MicroPackageError
+
+        try:
+            available = [item.to_dict() for item in MicroPackageCatalog.available()]
+            ids = {item["id"] for item in available}
+            unavailable = []
+            for package in MicroPackageCatalog.load().values():
+                if package["id"] in ids:
+                    continue
+                missing = sorted({
+                    node["algorithm_id"].split(":", 1)[0]
+                    for node in package["nodes"]
+                    if not AlgorithmCatalog.algorithm_exists(node["algorithm_id"])
+                })
+                needs = ", ".join(
+                    {"planx": "PlanX"}.get(provider, provider) for provider in missing
+                ) or "a missing algorithm"
+                unavailable.append((
+                    package["name"].replace("Showcase · ", ""),
+                    package["description"], needs,
+                ))
+        except MicroPackageError:
+            available, unavailable = [], []
+        self.start_page.set_starters(available, unavailable)
+        folders = model_folders()
+        self.start_page.set_models(list_models(folders), folders)
+        self.start_page.set_recent(self._recent_paths())
+
+    def _start_active(self) -> bool:
+        return self.canvas_stack.currentWidget() is self.start_page
+
+    def _start_with_starter(self, starter_id: str) -> None:
+        if self._start_active():
+            self.load_preset_package(starter_id)
+
+    def _start_with_path(self, path: str) -> None:
+        if self._start_active():
+            self.open_path(path)
+
+    def _start_blank(self) -> None:
+        self._start_dismissed = True
+        self._refresh_start_page()
+        self.status_label.setText(
+            "Blank canvas - double-click an algorithm on the left to add it."
+        )
+        self._focus_algorithm_search()
+
+    def _start_describe(self) -> None:
+        self._start_dismissed = True
+        self._refresh_start_page()
+        self.ai_prompt_bar.setFocus()
+        self.status_label.setText(
+            "Describe the workflow in the prompt bar above and press Enter."
+        )
+
+    def _recent_paths(self) -> list:
+        return recent_files.existing(
+            recent_files.loads(self.settings.value(self.RECENT_SETTING, "[]"))
+        )
+
+    def _remember_recent(self, path: str) -> None:
+        paths = recent_files.add(
+            recent_files.loads(self.settings.value(self.RECENT_SETTING, "[]")), path
+        )
+        self.settings.setValue(self.RECENT_SETTING, recent_files.dumps(paths))
+
+    def _rebuild_recent_menu(self) -> None:
+        self.recent_menu.clear()
+        paths = self._recent_paths()
+        if not paths:
+            empty = self.recent_menu.addAction("No recent workflows")
+            empty.setEnabled(False)
+            return
+        for path in paths:
+            action = self.recent_menu.addAction(Path(path).name)
+            action.setToolTip(path)
+            action.setStatusTip(path)
+            action.triggered.connect(
+                lambda _checked=False, target=path: self.open_path(target)
+            )
+
+    # ------------------------------------------------------------------ #
+    # Run for each layer
+    # ------------------------------------------------------------------ #
+    def _layer_inputs(self) -> list:
+        inputs = []
+        for node_id, node in self.graph.nodes.items():
+            if node.algorithm_id == "smart:input_layer":
+                inputs.append((node_id, node.title, "vector"))
+            elif node.algorithm_id == "smart:raster_layer":
+                inputs.append((node_id, node.title, "raster"))
+        return inputs
+
+    def run_for_each_layer(self) -> None:
+        if self._is_executing or self._ai_busy or self._external_run_active():
+            return
+        inputs = self._layer_inputs()
+        if not inputs:
+            QMessageBox.information(
+                self,
+                "Run for each layer",
+                "This workflow has no layer input to vary. Add a 'Vector layer "
+                "input' or 'Raster layer input' node (Inputs group) and connect "
+                "it where the layer should go.",
+            )
+            return
+        layers = {
+            "vector": sorted(AlgorithmCatalog.layer_choices(SocketType.VECTOR).items(),
+                             key=lambda item: item[1].casefold()),
+            "raster": sorted(AlgorithmCatalog.layer_choices(SocketType.RASTER).items(),
+                             key=lambda item: item[1].casefold()),
+        }
+        dialog = BatchRunDialog(inputs, layers, self)
+        dialog.setStyleSheet(STUDIO_STYLE)
+        if not dialog.exec():
+            return
+        self.start_batch(dialog.selected_input(), dialog.selected_layers())
+
+    def start_batch(self, node_id: str, layer_ids: list) -> bool:
+        """Run the workflow once per layer, varying one input node."""
+        node = self.graph.nodes.get(node_id)
+        if node is None or not layer_ids:
+            return False
+        self._batch = {
+            "node_id": node_id,
+            "layers": list(layer_ids),
+            "index": 0,
+            "original": node.parameters.get("LAYER", ""),
+            "rows": [],
+            "group": None,
+        }
+        self._batch_next()
+        return True
+
+    def _batch_next(self) -> None:
+        batch = self._batch
+        if batch is None:
+            return
+        if batch["index"] >= len(batch["layers"]):
+            self._finish_batch()
+            return
+        node = self.graph.nodes.get(batch["node_id"])
+        if node is None:
+            self._finish_batch("The varied input node no longer exists.")
+            return
+        node.parameters["LAYER"] = batch["layers"][batch["index"]]
+        node.is_dirty = True
+        item = self.scene.node_items.get(batch["node_id"])
+        if item is not None:
+            item.refresh()
+        self.status_label.setText(
+            f"Run {batch['index'] + 1} of {len(batch['layers'])}: "
+            f"{self._layer_name(batch['layers'][batch['index']])}"
+        )
+        self.run_model()
+        if not self._is_executing and self._batch is not None:
+            # The workflow refused to start (an input is missing or the
+            # user canceled Run setup): stop rather than try every layer.
+            self._finish_batch("The workflow could not start for this layer.")
+
+    @staticmethod
+    def _layer_name(layer_id: str) -> str:
+        layer = QgsProject.instance().mapLayer(layer_id)
+        return layer.name() if layer is not None else layer_id
+
+    def _batch_step_done(self, report) -> None:
+        batch = self._batch
+        layer_id = batch["layers"][batch["index"]]
+        name = self._layer_name(layer_id)
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        for result_id in report.added_layer_ids:
+            result = project.mapLayer(result_id)
+            if result is None:
+                continue
+            result.setName(f"{result.name()} — {name}")
+            if batch["group"] is None:
+                batch["group"] = root.insertGroup(
+                    0, f"Run for each layer — {self.graph.name or 'Workflow'}"
+                )
+            tree_layer = root.findLayer(result_id)
+            if tree_layer is not None:
+                batch["group"].addChildNode(tree_layer.clone())
+                tree_layer.parent().removeChildNode(tree_layer)
+        batch["rows"].append((name, report.status, report.message, len(report.added_layer_ids)))
+        if report.status == ExecutionStatus.CANCELED:
+            self._finish_batch("Canceled.")
+            return
+        batch["index"] += 1
+        QTimer.singleShot(0, self._batch_next)
+
+    def _finish_batch(self, note: str = "") -> None:
+        batch, self._batch = self._batch, None
+        if batch is None:
+            return
+        node = self.graph.nodes.get(batch["node_id"])
+        if node is not None:
+            node.parameters["LAYER"] = batch["original"]
+            item = self.scene.node_items.get(batch["node_id"])
+            if item is not None:
+                item.refresh()
+        lines = [
+            f"- {name}: {'done' if status == ExecutionStatus.COMPLETED else status}"
+            + (f", {count} result layer(s)" if count else "")
+            + (f" ({message})" if message and status != ExecutionStatus.COMPLETED else "")
+            for name, status, message, count in batch["rows"]
+        ]
+        done = sum(1 for row in batch["rows"] if row[1] == ExecutionStatus.COMPLETED)
+        summary = f"{done} of {len(batch['layers'])} run(s) completed."
+        self.status_label.setText(f"Run for each layer: {summary}")
+        self.last_batch_rows = batch["rows"]
+        if getattr(self, "suppress_batch_report", False):
+            return
+        QMessageBox.information(
+            self,
+            "Run for each layer",
+            summary + ("\n" + note if note else "") + "\n\n" + "\n".join(lines),
+        )
 
     def auto_layout(self) -> None:
         AutoLayoutEngine.apply_layout(self.graph)
@@ -1466,6 +1753,7 @@ class SmartModelerWindow(QMainWindow):
     def new_document(self, _checked: bool = False) -> None:
         if not self._maybe_save_changes("create a new workflow"):
             return
+        self._start_dismissed = False
         self._set_graph(GraphModel(), fit=False)
         self._current_path = None
         self._current_filter = ""

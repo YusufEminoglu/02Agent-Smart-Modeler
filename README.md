@@ -1,17 +1,24 @@
 # 02Agent Smart Modeler
 
 [![QGIS](https://img.shields.io/badge/QGIS-3.44%2B%20%7C%204.0%2B-589632.svg)](https://qgis.org)
-[![Release](https://img.shields.io/badge/release-1.5.28-2f80ed.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/release-1.7.0-2f80ed.svg)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/📖_Reference_Manual-13a0a0)](https://geophilo.com/zero2smartmodeler/)
 
 02Agent Smart Modeler is a QGIS 3.44+ and QGIS 4 visual studio for building and running real QGIS Processing workflows. It combines a typed node canvas, live algorithm discovery, validated AI planning, native `.model3` interchange, and a focused Qt5/Qt6 interface.
 
+## Quick start
+
+1. Open **Workflow Studio** from the 02Agent toolbar.
+2. On the start page, click a ready workflow — *Count points in polygons*, *Distance to the nearest feature*, *Catchment by distance*, … — or one of **your QGIS models**, or start a **blank canvas** and double-click algorithms on the left.
+3. Press **Run**: missing inputs are asked for once, on one sheet, with your project layers offered.
+4. Use **Run for each layer** to repeat it over many layers, and **Save As** to keep it as a `.model3` for the QGIS Model Designer or as Python.
+
 ## 📖 Documentation
 
 **[Comprehensive Academic Reference Manual](https://geophilo.com/zero2smartmodeler/)** — OSM algorithms, Workflow Studio, AI agent architecture, workflow patterns, and 83 DOI-verified academic references. Hosted on Web Documentation.
 
-Version 1.5.28 is the current production release. Every action proposed by a connected
+Version 1.7.0 is the current production release. Every action proposed by a connected
 provider remains inert until it passes local validation and the user explicitly
 approves it; deterministic offline workflow generation remains available
 without a network connection.

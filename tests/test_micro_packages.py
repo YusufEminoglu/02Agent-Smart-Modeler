@@ -34,6 +34,9 @@ class FakeCatalog:
         "native:rastersampling",
         "native:difference",
         "native:dissolve",
+        "native:joinbynearest",
+        "native:zonalstatisticsfb",
+        "native:reprojectlayer",
     }
 
     @classmethod
@@ -137,6 +140,20 @@ class FakeCatalog:
             )
             node.add_input("PREDICATE", "Predicate", SocketType.ENUM)
             node.add_output("OUTPUT", "Output", SocketType.VECTOR)
+        elif algorithm_id == "native:joinbynearest":
+            node.add_input("INPUT", "Input", SocketType.VECTOR, required=True)
+            node.add_input("INPUT_2", "Input 2", SocketType.VECTOR, required=True)
+            node.add_input("NEIGHBORS", "Neighbors", SocketType.NUMBER)
+            node.add_output("OUTPUT", "Output", SocketType.VECTOR)
+        elif algorithm_id == "native:zonalstatisticsfb":
+            node.add_input("INPUT", "Input", SocketType.VECTOR, required=True)
+            node.add_input("INPUT_RASTER", "Raster", SocketType.RASTER, required=True)
+            node.add_input("COLUMN_PREFIX", "Column prefix", SocketType.STRING)
+            node.add_output("OUTPUT", "Output", SocketType.VECTOR)
+        elif algorithm_id == "native:reprojectlayer":
+            node.add_input("INPUT", "Input", SocketType.VECTOR, required=True)
+            node.add_input("TARGET_CRS", "Target CRS", SocketType.CRS)
+            node.add_output("OUTPUT", "Output", SocketType.VECTOR)
         elif algorithm_id == "native:rastersampling":
             node.add_input("INPUT", "Input", SocketType.VECTOR, required=True)
             node.add_input(
@@ -150,7 +167,7 @@ class FakeCatalog:
 class MicroPackageCatalogTests(unittest.TestCase):
     def test_shipped_catalog_builds_every_available_graph(self):
         summaries = MicroPackageCatalog.available(FakeCatalog)
-        self.assertEqual(len(summaries), 15)
+        self.assertEqual(len(summaries), 21)
         self.assertTrue(all("showcase" in item.tags for item in summaries[:10]))
         for summary in summaries:
             graph = MicroPackageCatalog.instantiate(

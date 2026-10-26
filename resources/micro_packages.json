@@ -516,6 +516,112 @@
         {"name": "CANDIDATE_CELL_EDGES", "node_id": "candidate_edges", "output_name": "OUTPUT", "description": "Edges of candidate influence cells", "mandatory": false, "default": null},
         {"name": "STRATEGIC_ENVELOPE", "node_id": "strategic_envelope", "output_name": "OUTPUT", "description": "Convex envelope of suitable land", "mandatory": false, "default": null}
       ]
+    },
+    {
+      "id": "dissolve_features",
+      "name": "Dissolve features",
+      "description": "Merge the features of a layer into one, or into one per value of a field you pick in Run setup.",
+      "tags": ["everyday", "vector", "generalisation"],
+      "nodes": [
+        {"id": "features", "algorithm_id": "smart:input_layer", "title": "Features", "parameters": {}},
+        {"id": "dissolve", "algorithm_id": "native:dissolve", "title": "Dissolve", "parameters": {}}
+      ],
+      "connections": [
+        {"from_node": "features", "from_port": "OUTPUT", "to_node": "dissolve", "to_port": "INPUT"}
+      ],
+      "outputs": [
+        {"name": "DISSOLVED", "node_id": "dissolve", "output_name": "OUTPUT", "description": "Dissolved features", "mandatory": true, "default": null}
+      ]
+    },
+    {
+      "id": "count_points_in_polygons",
+      "name": "Count points in polygons",
+      "description": "Count how many points of one layer fall inside each polygon of another - shops per district, trees per block.",
+      "tags": ["everyday", "vector", "statistics"],
+      "nodes": [
+        {"id": "polygons", "algorithm_id": "smart:input_layer", "title": "Polygons", "parameters": {}},
+        {"id": "points", "algorithm_id": "smart:input_layer", "title": "Points", "parameters": {}},
+        {"id": "count", "algorithm_id": "native:countpointsinpolygon", "title": "Count points", "parameters": {}}
+      ],
+      "connections": [
+        {"from_node": "polygons", "from_port": "OUTPUT", "to_node": "count", "to_port": "POLYGONS"},
+        {"from_node": "points", "from_port": "OUTPUT", "to_node": "count", "to_port": "POINTS"}
+      ],
+      "outputs": [
+        {"name": "COUNTS", "node_id": "count", "output_name": "OUTPUT", "description": "Polygons with a point count", "mandatory": true, "default": null}
+      ]
+    },
+    {
+      "id": "nearest_feature_join",
+      "name": "Distance to the nearest feature",
+      "description": "Attach to every feature the nearest feature of a second layer and the distance to it - homes to the nearest school, stops to the nearest station.",
+      "tags": ["everyday", "vector", "proximity"],
+      "nodes": [
+        {"id": "origins", "algorithm_id": "smart:input_layer", "title": "Origins", "parameters": {}},
+        {"id": "targets", "algorithm_id": "smart:input_layer", "title": "Nearest of", "parameters": {}},
+        {"id": "nearest", "algorithm_id": "native:joinbynearest", "title": "Join by nearest", "parameters": {}}
+      ],
+      "connections": [
+        {"from_node": "origins", "from_port": "OUTPUT", "to_node": "nearest", "to_port": "INPUT"},
+        {"from_node": "targets", "from_port": "OUTPUT", "to_node": "nearest", "to_port": "INPUT_2"}
+      ],
+      "outputs": [
+        {"name": "NEAREST", "node_id": "nearest", "output_name": "OUTPUT", "description": "Features with their nearest match and distance", "mandatory": true, "default": null}
+      ]
+    },
+    {
+      "id": "zonal_statistics",
+      "name": "Raster statistics per zone",
+      "description": "Summarise a raster (elevation, temperature, population density) inside every polygon of a zone layer.",
+      "tags": ["everyday", "raster", "statistics"],
+      "nodes": [
+        {"id": "zones", "algorithm_id": "smart:input_layer", "title": "Zones", "parameters": {}},
+        {"id": "raster", "algorithm_id": "smart:raster_layer", "title": "Raster", "parameters": {}},
+        {"id": "zonal", "algorithm_id": "native:zonalstatisticsfb", "title": "Zonal statistics", "parameters": {}}
+      ],
+      "connections": [
+        {"from_node": "zones", "from_port": "OUTPUT", "to_node": "zonal", "to_port": "INPUT"},
+        {"from_node": "raster", "from_port": "OUTPUT", "to_node": "zonal", "to_port": "INPUT_RASTER"}
+      ],
+      "outputs": [
+        {"name": "ZONES", "node_id": "zonal", "output_name": "OUTPUT", "description": "Zones with raster statistics", "mandatory": true, "default": null}
+      ]
+    },
+    {
+      "id": "repair_and_reproject",
+      "name": "Repair and reproject",
+      "description": "Fix invalid geometries, then reproject the layer to the coordinate system you choose in Run setup.",
+      "tags": ["everyday", "vector", "data preparation"],
+      "nodes": [
+        {"id": "features", "algorithm_id": "smart:input_layer", "title": "Features", "parameters": {}},
+        {"id": "fix", "algorithm_id": "native:fixgeometries", "title": "Fix geometries", "parameters": {}},
+        {"id": "reproject", "algorithm_id": "native:reprojectlayer", "title": "Reproject", "parameters": {}}
+      ],
+      "connections": [
+        {"from_node": "features", "from_port": "OUTPUT", "to_node": "fix", "to_port": "INPUT"},
+        {"from_node": "fix", "from_port": "OUTPUT", "to_node": "reproject", "to_port": "INPUT"}
+      ],
+      "outputs": [
+        {"name": "REPROJECTED", "node_id": "reproject", "output_name": "OUTPUT", "description": "Repaired, reprojected features", "mandatory": true, "default": null}
+      ]
+    },
+    {
+      "id": "buffer_and_merge",
+      "name": "Catchment by distance",
+      "description": "Buffer features by a distance and merge the overlaps into one catchment - the area within reach of any of them.",
+      "tags": ["everyday", "vector", "proximity"],
+      "nodes": [
+        {"id": "features", "algorithm_id": "smart:input_layer", "title": "Features", "parameters": {}},
+        {"id": "distance", "algorithm_id": "smart:number", "title": "Distance", "parameters": {"VALUE": 500.0}},
+        {"id": "buffer", "algorithm_id": "native:buffer", "title": "Buffer and merge", "parameters": {"DISSOLVE": true}}
+      ],
+      "connections": [
+        {"from_node": "features", "from_port": "OUTPUT", "to_node": "buffer", "to_port": "INPUT"},
+        {"from_node": "distance", "from_port": "OUTPUT", "to_node": "buffer", "to_port": "DISTANCE"}
+      ],
+      "outputs": [
+        {"name": "CATCHMENT", "node_id": "buffer", "output_name": "OUTPUT", "description": "Merged catchment", "mandatory": true, "default": null}
+      ]
     }
   ]
 }
