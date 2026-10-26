@@ -2,7 +2,7 @@
 
 [![QGIS](https://img.shields.io/badge/QGIS-3.44%2B%20%7C%204.0%2B-589632.svg)](https://qgis.org)
 [![Release](https://img.shields.io/badge/release-1.7.0-2f80ed.svg)](CHANGELOG.md)
-[![License](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Documentation](https://img.shields.io/badge/📖_Reference_Manual-13a0a0)](https://geophilo.com/zero2smartmodeler/)
 
 02Agent Smart Modeler is a QGIS 3.44+ and QGIS 4 visual studio for building and running real QGIS Processing workflows. It combines a typed node canvas, live algorithm discovery, validated AI planning, native `.model3` interchange, and a focused Qt5/Qt6 interface.
@@ -532,4 +532,4 @@ about directly, and the QGIS-side adapter is only allowed to make the outcome
 
 ## License
 
-GPL-3.0. Developed by Yusuf Eminoglu as part of the PlanX QGIS Plugin Ecosystem.
+GPL-3.0-or-later. Developed by Yusuf Eminoglu as part of the PlanX QGIS Plugin Ecosystem.

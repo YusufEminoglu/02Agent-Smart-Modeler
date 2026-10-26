@@ -20,8 +20,7 @@ icon=icons/icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
-license=GPL-3
-
+license=GPL-3.0-or-later
 changelog=
     1.7.0 - A start page instead of an empty canvas: 21 ready workflows including six new everyday ones built from QGIS's own algorithms (dissolve, count points in polygons, distance to the nearest feature, raster statistics per zone, repair and reproject, catchment by distance), your QGIS models from the profile's models folder in one click, and recent workflows. Run for each layer repeats a workflow over the layers you tick, names every result after its layer and collects them in one group. Open recent in the toolbar. Plainer Hub description and tags.
     1.6.0 - Redesign plugin and Agent Workspace icons to the circular teal 3D studio diorama brand language. Expand SmartProposalEngine across VECTOR, RASTER, NUMBER, EXTENT, CRS, FIELD, and STRING sockets with self-loop demotion and multi-port deduplication. Upgrade AutoLayoutEngine with longest-path DAG ranking (including node dependencies), barycenter crossing reduction, and collision-free sibling placement. Add open-way multipolygon ring assembly, area=yes/no disambiguation, and expanded urban planning attributes to built-in OSM acquisition. Improve NodeGraphicsItem with case-insensitive semantic category colors, elided labels, and inactive/skipped/canceled state rendering.
