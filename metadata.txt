@@ -3,7 +3,7 @@ name=02SmartModeler - Visual Workflow Builder
 qgisMinimumVersion=3.44
 qgisMaximumVersion=4.99
 description=Build and run QGIS Processing workflows on a visual canvas: start from 21 ready workflows, open your own models in one click, run a workflow on every layer at once and save it as .model3 or Python.
-version=1.7.0
+version=1.7.1
 author=Geophilo
 email=yusuf.eminoglu@deu.edu.tr
 
