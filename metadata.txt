@@ -2,19 +2,22 @@
 name=02SmartModeler - Visual Workflow Builder
 qgisMinimumVersion=3.44
 qgisMaximumVersion=4.99
-description=Build and run QGIS Processing workflows on a visual canvas: start from 21 ready workflows, open your existing QGIS models in one click, run a workflow on every layer at once, and save it for the QGIS Model Designer or as Python.
+description=Build and run QGIS Processing workflows on a visual canvas: start from 21 ready workflows, open your own models in one click, run a workflow on every layer at once and save it as .model3 or Python.
 version=1.7.0
 author=Geophilo
 email=yusuf.eminoglu@deu.edu.tr
 
-about=02Agent Smart Modeler is a visual canvas for building and running QGIS Processing workflows without writing code. It opens on a start page with 21 ready workflows - six everyday tasks (dissolve, count points in polygons, distance to the nearest feature, raster statistics per zone, repair and reproject, catchment by distance), five small building blocks and ten urban-analytics showcases - plus your own QGIS models from the profile's models folder and your recent files, each one click away. Run for each layer repeats a workflow over every layer you tick and collects the results in one group. Workflows save as native .model3 for the QGIS Model Designer or as a Python script. Under the hood it is a QGIS 3.44+ and QGIS 4 visual Processing studio with typed workflows, native .model3 interchange, validated AI planning, reviewed temporary-layer Processing runs, first-class QGIS expressions, and bounded OSM acquisition. Agent Workspace uses compact intent-routed prompts, read-only project tools, and a bounded Workspace (Developer) scope for source inspection, safe diagnostics, and exact reviewed patches; proposals remain inert until an explicit Apply or Run click. Optional Power Mode is off by default and adds full-source SQL, trusted-script, and generated PyQGIS approval cards. Database writes and live in-process Python require a second confirmation; isolated Python uses a cancellable timeout-bounded QGIS subprocess but is not a security sandbox. Connection URIs, credentials, source paths, feature values, and API secrets are not sent as tool metadata. Provider-reported last-request, chat, and cached input usage is visible, with a local preflight estimate and milestone-based large-request notices that never impose an absolute token stop. The 02Agent Urban Context preset can obtain roads, buildings, and trees in one reviewed run when installed; built-in geometry-specific OSM tools remain available. API keys use session memory or the optional encrypted QGIS vault. No pip dependencies are required. Online User Manual & Documentation: https://geophilo.com/zero2smartmodeler/ | If you find this plugin helpful, please consider starring the repository on GitLab (https://gitlab.com/geophilo1/zero2smartmodeler)!
+about=02SmartModeler is a visual canvas for building Processing workflows without writing code. The start page offers 21 ready workflows (everyday tasks such as dissolve, points in polygons, nearest-feature distance, zonal raster statistics and repair-and-reproject, small building blocks, and ten urban-analytics showcases), together with the models in your QGIS profile and your recent files.
+    Connect tools, use QGIS expressions anywhere, and run the result on one layer or repeat it over every layer you tick, with the outputs collected in one group. Workflows save as native .model3 files for the QGIS Model Designer or as Python scripts.
+    An optional AI assistant proposes workflows from a plain-language request. It needs your own API key from a supported provider, reads the project without changing it, and nothing it proposes runs until you press Apply or Run. Everything else works without a key.
+    Manual: https://geophilo.com/zero2smartmodeler/manual.html
 
 tracker=https://gitlab.com/geophilo1/zero2smartmodeler/-/issues
 repository=https://gitlab.com/geophilo1/zero2smartmodeler
 homepage=https://geophilo.com/zero2smartmodeler/
 
 category=Processing
-tags=model designer,graphical modeler,processing modeler,workflow,automation,batch,no-code,visual programming,model3,python,processing,modeler,zero2agent,ai,qgis,qgis3,qgis4
+tags=model designer,graphical modeler,processing modeler,workflow,automation,batch,no-code,visual programming,model3,python,processing,modeler,ai,geophilo
 icon=icons/icon.png
 
 experimental=False

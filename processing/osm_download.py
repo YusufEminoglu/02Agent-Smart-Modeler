@@ -321,7 +321,7 @@ class _DownloadOsmAlgorithm(QgsProcessingAlgorithm):
     ALGORITHM_NAME = ""
     DISPLAY_NAME = ""
     WKB_TYPE = QgsWkbTypes.Type.Unknown
-    DOC_BASE = "https://yusufeminoglu.github.io/02Agent-Smart-Modeler/SMARTMODELER_REFERENCE_MANUAL.html"
+    DOC_BASE = "https://geophilo.com/zero2smartmodeler/manual.html"
 
     def name(self) -> str:
         return self.ALGORITHM_NAME

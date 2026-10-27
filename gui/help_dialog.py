@@ -12,14 +12,13 @@ from qgis.PyQt.QtWidgets import (
 )
 
 REFERENCE_MANUAL_URL = (
-    "https://yusufeminoglu.github.io/02Agent-Smart-Modeler/"
-    "SMARTMODELER_REFERENCE_MANUAL.html"
+    "https://geophilo.com/zero2smartmodeler/manual.html"
 )
 # The illustrated walkthrough. Screenshots belong on a web page, not in a
 # plugin zip that every user downloads, so the in-application guides stay short
 # and hand off here for the pictures.
 STEP_BY_STEP_GUIDE_URL = (
-    "https://yusufeminoglu.github.io/02Agent-Smart-Modeler/GUIDE.html"
+    "https://geophilo.com/zero2smartmodeler/guide/"
 )
 
 
