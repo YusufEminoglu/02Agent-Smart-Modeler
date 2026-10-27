@@ -532,4 +532,4 @@ about directly, and the QGIS-side adapter is only allowed to make the outcome
 
 ## License
 
-GPL-3.0-or-later. Developed by Yusuf Eminoglu as part of the PlanX QGIS Plugin Ecosystem.
+GPL-3.0-or-later. Developed by Geophilo as part of the PlanX QGIS Plugin Ecosystem.
