@@ -54,21 +54,21 @@ class ExtractByReferenceAttributeAlgorithm(QgsProcessingAlgorithm):
             QgsProcessingParameterFeatureSource(
                 self.INPUT,
                 "Input layer",
-                [QgsProcessing.TypeVectorAnyGeometry],
+                [QgsProcessing.SourceType.TypeVectorAnyGeometry],
             )
         )
         self.addParameter(
             QgsProcessingParameterFeatureSource(
                 self.REFERENCE,
                 "Reference layer",
-                [QgsProcessing.TypeVectorAnyGeometry],
+                [QgsProcessing.SourceType.TypeVectorAnyGeometry],
             )
         )
         self.addParameter(
             QgsProcessingParameterField(
                 self.REFERENCE_FIELD,
                 "Reference attribute",
-                type=QgsProcessingParameterField.Any,
+                type=QgsProcessingParameterField.DataType.Any,
                 parentLayerParameterName=self.REFERENCE,
             )
         )
@@ -138,7 +138,7 @@ class ExtractByReferenceAttributeAlgorithm(QgsProcessingAlgorithm):
                 relation(geometry, reference_geometry)
                 for reference_geometry in reference_geometries
             ):
-                sink.addFeature(feature, QgsFeatureSink.FastInsert)
+                sink.addFeature(feature, QgsFeatureSink.Flag.FastInsert)
             if total > 0:
                 feedback.setProgress(int(index * 100 / total))
         return {self.OUTPUT: destination}

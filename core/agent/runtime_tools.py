@@ -559,7 +559,7 @@ def _tool_field_values(call: AgentToolCall) -> Dict[str, Any]:
     values: List[Any] = []
     try:
         request = QgsFeatureRequest()
-        request.setFlags(QgsFeatureRequest.NoGeometry)
+        request.setFlags(QgsFeatureRequest.Flag.NoGeometry)
         request.setSubsetOfAttributes([index])
         for feature in layer.getFeatures(request):
             value = feature.attribute(index)

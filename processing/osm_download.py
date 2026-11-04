@@ -59,10 +59,7 @@ def _known_header(name: str):
 
 
 def _status_attribute():
-    enum = getattr(QNetworkRequest, "Attribute", None)
-    if enum is not None:
-        return enum.HttpStatusCodeAttribute
-    return QNetworkRequest.HttpStatusCodeAttribute
+    return QNetworkRequest.Attribute.HttpStatusCodeAttribute
 
 
 def _fetch_json(query: str, feedback) -> Dict:
@@ -95,7 +92,7 @@ def _fetch_json(query: str, feedback) -> Dict:
         request.setRawHeader(b"User-Agent", USER_AGENT.encode("ascii"))
         client = QgsBlockingNetworkRequest()
         code = client.post(request, body, False, feedback)
-        if code != QgsBlockingNetworkRequest.NoError:
+        if code != QgsBlockingNetworkRequest.ErrorCode.NoError:
             # QGIS' raw error often embeds the endpoint URL. Keep the surfaced
             # failure useful but path/URL-free so Agent Chat can display it.
             errors.append("network request failed")

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.7.2] - 2026-11-04
+
+- Qt6/QGIS 4 compatibility: enum names scoped as the QGIS Hub Qt6 check asks (feature-request, feature-sink, processing and network enums); works on QGIS 3 and 4, no change in behaviour.
+
 ## [1.7.1] - 2026-10-27
 
 - Hub listing text rewritten; author Geophilo; university affiliation removed; documentation links use the standard geophilo.com pages (manual.html, guide/); manual HTML no longer ships in the plugin package.
